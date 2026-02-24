@@ -9,6 +9,8 @@ import type { MarketCatalogue, MarketBook, RunnerBook } from "@/types/betfair";
 const POLL_INTERVAL = 60_000; // 60 seconds
 const ACTIVE_RACE_POLL_INTERVAL = 30_000; // 30 seconds for races starting within 30 min
 const KEEPALIVE_INTERVAL = 600_000; // 10 minutes
+const LOGIN_RETRY_INTERVAL = 30_000; // 30 seconds between login retries
+const MAX_LOGIN_RETRIES = 10;
 
 let isRunning = false;
 
@@ -31,9 +33,21 @@ export async function startBetfairPoller() {
     return;
   }
 
-  const loggedIn = await client.login(username, password);
+  // Retry login with backoff
+  let loggedIn = false;
+  for (let attempt = 1; attempt <= MAX_LOGIN_RETRIES; attempt++) {
+    console.log(`[Poller] Login attempt ${attempt}/${MAX_LOGIN_RETRIES}`);
+    loggedIn = await client.login(username, password);
+    if (loggedIn) break;
+    if (attempt < MAX_LOGIN_RETRIES) {
+      const waitMs = LOGIN_RETRY_INTERVAL * attempt;
+      console.log(`[Poller] Retrying login in ${waitMs / 1000}s...`);
+      await sleep(waitMs);
+    }
+  }
+
   if (!loggedIn) {
-    console.error("[Poller] Failed to login to Betfair");
+    console.error("[Poller] Failed to login to Betfair after all retries");
     isRunning = false;
     return;
   }

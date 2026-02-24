@@ -7,9 +7,26 @@ import type {
   EventTypeResult,
 } from "@/types/betfair";
 
-const BETFAIR_LOGIN_URL = "https://identitysso-cert.betfair.com/api/certlogin";
-const BETFAIR_LOGIN_URL_SIMPLE = "https://identitysso.betfair.com/api/login";
-const BETFAIR_API_URL = "https://api.betfair.com/exchange/betting/rest/v1.0";
+// Betfair endpoint configuration - supports both global (.com) and Australian (.com.au) endpoints
+// Set BETFAIR_LOCALE=AU in environment to use Australian endpoints
+const LOCALE = process.env.BETFAIR_LOCALE || "AU";
+
+const ENDPOINTS = {
+  AU: {
+    login: "https://identitysso.betfair.com.au/api/login",
+    certLogin: "https://identitysso-cert.betfair.com.au/api/certlogin",
+    api: "https://api.betfair.com.au/exchange/betting/rest/v1.0",
+    keepAlive: "https://identitysso.betfair.com.au/api/keepAlive",
+  },
+  GLOBAL: {
+    login: "https://identitysso.betfair.com/api/login",
+    certLogin: "https://identitysso-cert.betfair.com/api/certlogin",
+    api: "https://api.betfair.com/exchange/betting/rest/v1.0",
+    keepAlive: "https://identitysso.betfair.com/api/keepAlive",
+  },
+} as const;
+
+const activeEndpoints = LOCALE === "AU" ? ENDPOINTS.AU : ENDPOINTS.GLOBAL;
 
 // Horse Racing = 7, Greyhound Racing = 4339
 export const HORSE_RACING_EVENT_TYPE = "7";
@@ -26,9 +43,10 @@ export class BetfairClient {
   constructor(appKey: string) {
     this.appKey = appKey;
     this.httpClient = axios.create({
-      baseURL: BETFAIR_API_URL,
+      baseURL: activeEndpoints.api,
       timeout: 30000,
     });
+    console.log(`[Betfair] Using ${LOCALE} endpoints (API: ${activeEndpoints.api})`);
   }
 
   private getHeaders() {
@@ -56,31 +74,51 @@ export class BetfairClient {
   }
 
   async login(username: string, password: string): Promise<boolean> {
-    try {
-      const response = await axios.post(
-        BETFAIR_LOGIN_URL_SIMPLE,
-        `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`,
-        {
-          headers: {
-            "X-Application": this.appKey,
-            "Content-Type": "application/x-www-form-urlencoded",
-            Accept: "application/json",
-          },
+    // Try primary endpoint first, then fallback to the other locale
+    const loginUrls = LOCALE === "AU"
+      ? [ENDPOINTS.AU.login, ENDPOINTS.GLOBAL.login]
+      : [ENDPOINTS.GLOBAL.login, ENDPOINTS.AU.login];
+
+    for (const loginUrl of loginUrls) {
+      try {
+        console.log(`[Betfair] Attempting login via ${loginUrl}`);
+        const response = await axios.post(
+          loginUrl,
+          `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`,
+          {
+            headers: {
+              "X-Application": this.appKey,
+              "Content-Type": "application/x-www-form-urlencoded",
+              Accept: "application/json",
+            },
+            timeout: 15000,
+            // Don't throw on non-2xx so we can inspect the response
+            validateStatus: () => true,
+          }
+        );
+
+        console.log(`[Betfair] Login response status: ${response.status}`);
+
+        if (response.status === 403) {
+          console.warn(`[Betfair] Geo-blocked on ${loginUrl}, trying next endpoint...`);
+          continue;
         }
-      );
 
-      if (response.data.status === "SUCCESS") {
-        this.sessionToken = response.data.token;
-        console.log("[Betfair] Login successful");
-        return true;
+        if (response.data?.status === "SUCCESS") {
+          this.sessionToken = response.data.token;
+          console.log("[Betfair] Login successful");
+          return true;
+        }
+
+        console.error("[Betfair] Login failed:", response.data?.error || response.status);
+      } catch (error: unknown) {
+        const msg = error instanceof Error ? error.message : String(error);
+        console.error(`[Betfair] Login error on ${loginUrl}: ${msg}`);
       }
-
-      console.error("[Betfair] Login failed:", response.data.error);
-      return false;
-    } catch (error) {
-      console.error("[Betfair] Login error:", error);
-      return false;
     }
+
+    console.error("[Betfair] All login endpoints failed");
+    return false;
   }
 
   setSessionToken(token: string) {
@@ -188,7 +226,7 @@ export class BetfairClient {
   async keepAlive(): Promise<boolean> {
     try {
       const response = await axios.get(
-        "https://identitysso.betfair.com/api/keepAlive",
+        activeEndpoints.keepAlive,
         {
           headers: {
             "X-Application": this.appKey,
