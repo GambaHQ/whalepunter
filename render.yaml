@@ -28,7 +28,7 @@ services:
       - key: NEXTAUTH_URL
         value: "https://whalepunter-web.onrender.com"
       - key: NEXT_PUBLIC_WS_URL
-        sync: false
+        value: "https://whalepunter-ws.onrender.com"
       - key: BETFAIR_APP_KEY
         sync: false
       - key: BETFAIR_USERNAME
