@@ -17,8 +17,13 @@ async function main() {
     await processAlert(event);
   });
 
-  // Start the Betfair poller
-  await startBetfairPoller();
+  // Start the Betfair poller (non-fatal if login fails - aggregation tasks still run)
+  try {
+    await startBetfairPoller();
+  } catch (error) {
+    console.warn("[Worker] Betfair poller failed to start - running aggregation tasks only:", error);
+    console.warn("[Worker] Run the poller locally with: npm run poller");
+  }
 
   // Periodic odds analysis loop
   setInterval(async () => {
