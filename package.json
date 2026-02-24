@@ -15,6 +15,10 @@
     "db:seed": "tsx prisma/seed.ts",
     "workers": "tsx src/workers/index.ts",
     "poller": "tsx --env-file=.env.local src/workers/poller-standalone.ts",
+    "import:dogs": "tsx --env-file=.env.local src/scripts/import-greyhounds.ts",
+    "import:horses": "tsx --env-file=.env.local src/scripts/import-horses.ts",
+    "reconcile": "tsx --env-file=.env.local src/scripts/reconcile-runners.ts",
+    "sync:daily": "tsx --env-file=.env.local src/scripts/sync-daily.ts",
     "ws-server": "tsx src/server/websocket.ts"
   },
   "keywords": [],

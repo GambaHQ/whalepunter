@@ -125,6 +125,8 @@ model Race {
   startTime   DateTime
   status      RaceStatus @default(UPCOMING)
   resultJson  Json?
+  externalId  String?    @unique // External source race ID (Topaz/PuntingForm)
+  trackCode   String?    // Short track code from external source
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
 
@@ -148,6 +150,8 @@ model Runner {
   dam         String?
   kennel      String?
   imageUrl    String?
+  externalId  String?  @unique // External source runner ID (Topaz/PuntingForm)
+  dataSource  String?  // "BETFAIR", "TOPAZ", "PUNTING_FORM", "MERGED"
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -156,6 +160,7 @@ model Runner {
   whaleBets    WhaleBet[]
   fluctuations OddsFluctuation[]
   stats        RunnerStat[]
+  aliases      RunnerAlias[]
   watchlistItems Watchlist[] @relation("WatchlistRunner")
 
   @@index([name, type])
@@ -474,6 +479,35 @@ model TrackBias {
 
   @@unique([venue, distance, position])
   @@index([venue])
+}
+
+// ==================== DATA IMPORT ====================
+
+model ImportProgress {
+  id                String    @id @default(cuid())
+  importType        String    // "TOPAZ_BULK" | "PUNTING_FORM_BULK" | "DAILY_SYNC"
+  raceType          RaceType
+  lastProcessedDate DateTime?
+  recordsProcessed  Int       @default(0)
+  status            String    @default("IN_PROGRESS") // IN_PROGRESS | COMPLETED | FAILED
+  errorLog          Json?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([importType, status])
+}
+
+model RunnerAlias {
+  id        String @id @default(cuid())
+  runnerId  String
+  aliasName String
+  source    String // "BETFAIR" | "TOPAZ" | "PUNTING_FORM"
+  createdAt DateTime @default(now())
+
+  runner Runner @relation(fields: [runnerId], references: [id], onDelete: Cascade)
+
+  @@unique([aliasName, source])
+  @@index([aliasName])
 }
 
 // ==================== ENUMS ====================
