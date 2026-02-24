@@ -52,7 +52,7 @@ const navSections: NavSection[] = [
     title: "MAIN",
     items: [
       { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-      { name: "Live Races", href: "/live-races", icon: Zap },
+      { name: "Live Races", href: "/races", icon: Zap },
       { name: "Market Movers", href: "/market-movers", icon: TrendingUp },
     ],
   },
@@ -68,9 +68,9 @@ const navSections: NavSection[] = [
   {
     title: "RUNNERS",
     items: [
-      { name: "Horse Profiles", href: "/horse-profiles", icon: Search },
-      { name: "Dog Profiles", href: "/dog-profiles", icon: Search },
-      { name: "Compare", href: "/compare", icon: GitCompare },
+      { name: "Horse Profiles", href: "/runners?type=horse", icon: Search },
+      { name: "Dog Profiles", href: "/runners?type=dog", icon: Search },
+      { name: "Compare", href: "/runners/compare", icon: GitCompare },
       { name: "Trainers", href: "/trainers", icon: Users },
       { name: "Jockeys", href: "/jockeys", icon: User },
     ],
@@ -88,7 +88,7 @@ const navSections: NavSection[] = [
     title: "SOCIAL",
     items: [
       { name: "Leaderboard", href: "/leaderboard", icon: Trophy },
-      { name: "Race Chat", href: "/race-chat", icon: MessageCircle },
+      { name: "Race Chat", href: "/chat", icon: MessageCircle },
     ],
   },
 ];
