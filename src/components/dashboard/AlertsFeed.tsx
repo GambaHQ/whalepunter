@@ -90,7 +90,7 @@ export default function AlertsFeed() {
           )}
         </div>
         <Link
-          href="/dashboard/alerts"
+          href="/alerts"
           className="text-sm text-[hsl(var(--primary))] hover:underline"
         >
           View All
