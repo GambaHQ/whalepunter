@@ -219,13 +219,13 @@ export function LiveOddsTable({ runners, maxVolume }: LiveOddsTableProps) {
                     </div>
                   </td>
                   <td className="px-4 py-3 text-right text-sm font-medium">
-                    {runner.marketPercentage.toFixed(1)}%
+                    {(runner.marketPercentage ?? 0).toFixed(1)}%
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-center gap-1">
-                      <ChangeIcon change={runner.oddsChange} />
-                      <span className={cn("text-xs font-medium", getOddsChangeColor(runner.oddsChange))}>
-                        {formatPercentage(runner.oddsChange)}
+                      <ChangeIcon change={runner.oddsChange ?? 0} />
+                      <span className={cn("text-xs font-medium", getOddsChangeColor(runner.oddsChange ?? 0))}>
+                        {formatPercentage(runner.oddsChange ?? 0)}
                       </span>
                     </div>
                   </td>

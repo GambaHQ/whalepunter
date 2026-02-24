@@ -49,7 +49,51 @@ interface OddsFluctuation {
 async function fetchRaceDetail(raceId: string): Promise<RaceDetail> {
   const res = await fetch(`/api/races/${raceId}`);
   if (!res.ok) throw new Error("Failed to fetch race details");
-  return res.json();
+  const data = await res.json();
+
+  // Calculate total back odds for market percentage
+  const runnersWithOdds = data.runners || [];
+  const totalBackProbability = runnersWithOdds.reduce((sum: number, r: any) => {
+    const odds = r.odds?.backOdds || 0;
+    return sum + (odds > 0 ? 1 / odds : 0);
+  }, 0);
+
+  // Transform API response to match RaceDetail interface
+  const transformedRunners: RunnerData[] = runnersWithOdds.map((r: any) => {
+    const backOdds = r.odds?.backOdds ?? 0;
+    const layOdds = r.odds?.layOdds ?? 0;
+    const volume = r.odds?.volumeMatched ?? 0;
+    const impliedProb = backOdds > 0 ? 1 / backOdds : 0;
+    const marketPercentage = totalBackProbability > 0 ? (impliedProb / totalBackProbability) * 100 : 0;
+
+    return {
+      id: r.runner?.id || r.entryId,
+      barrier: r.barrierBox ?? 0,
+      name: r.runner?.name || "Unknown",
+      backOdds,
+      layOdds,
+      volume,
+      marketPercentage,
+      oddsChange: 0, // Will be updated via WebSocket
+      form: undefined,
+      hasWhaleBet: false,
+    };
+  });
+
+  return {
+    id: data.id,
+    name: data.name || `Race ${data.raceNumber}`,
+    venue: data.meeting?.venue || "Unknown",
+    meetingName: `${data.meeting?.venue || "Unknown"} - R${data.raceNumber}`,
+    type: data.meeting?.type?.toLowerCase() === "dog" ? "dog" : "horse",
+    distance: data.distance || 0,
+    conditions: data.conditions,
+    startTime: data.startTime,
+    status: data.status || "UPCOMING",
+    runners: transformedRunners,
+    totalVolume: data.market?.totalMatched || 0,
+    marketId: data.market?.id || "",
+  };
 }
 
 async function fetchWhaleAlerts(raceId: string): Promise<WhaleAlert[]> {
