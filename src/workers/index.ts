@@ -17,12 +17,15 @@ async function main() {
     await processAlert(event);
   });
 
-  // Start the Betfair poller (non-fatal if login fails - aggregation tasks still run)
-  try {
-    await startBetfairPoller();
-  } catch (error) {
-    console.warn("[Worker] Betfair poller failed to start - running aggregation tasks only:", error);
-    console.warn("[Worker] Run the poller locally with: npm run poller");
+  // Start the Betfair poller (skip if SKIP_BETFAIR=true, e.g. on Render where IPs are blocked)
+  if (process.env.SKIP_BETFAIR === "true") {
+    console.log("[Worker] SKIP_BETFAIR=true — skipping Betfair poller (run locally with: npm run poller)");
+  } else {
+    try {
+      await startBetfairPoller();
+    } catch (error) {
+      console.warn("[Worker] Betfair poller failed to start - running aggregation tasks only:", error);
+    }
   }
 
   // Periodic odds analysis loop
