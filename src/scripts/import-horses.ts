@@ -91,13 +91,12 @@ async function main() {
       console.error(`[Import] ERROR on ${dateStr}: ${msg}`);
 
       // Log error and continue
+      const existingErrors = (progress!.errorLog as Record<string, string>) ?? {};
+      existingErrors[dateStr] = msg;
       await prisma.importProgress.update({
         where: { id: progress!.id },
         data: {
-          errorLog: {
-            ...(progress!.errorLog as Record<string, unknown> || {}),
-            [dateStr]: msg,
-          },
+          errorLog: existingErrors as unknown as Record<string, string>,
         },
       });
     }

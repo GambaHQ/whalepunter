@@ -100,13 +100,12 @@ async function main() {
         console.error(`[Import] ERROR processing ${label}: ${msg}`);
 
         // Log error but continue to next month
+        const existingErrors = (progress!.errorLog as Record<string, string>) ?? {};
+        existingErrors[label] = msg;
         await prisma.importProgress.update({
           where: { id: progress!.id },
           data: {
-            errorLog: {
-              ...(progress!.errorLog as Record<string, unknown> || {}),
-              [label]: msg,
-            },
+            errorLog: existingErrors as unknown as Record<string, string>,
           },
         });
       }
