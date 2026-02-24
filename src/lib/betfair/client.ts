@@ -213,12 +213,19 @@ export class BetfairClient {
   }
 
   async getMarketOdds(marketIds: string[]): Promise<MarketBook[]> {
-    // Batch requests in groups of 40 (Betfair limit)
+    // Betfair weight limit: 200 points per request
+    // EX_BEST_OFFERS=5 + EX_TRADED=17 = 22 per market → max ~9 per batch
+    const BATCH_SIZE = 8;
     const results: MarketBook[] = [];
-    for (let i = 0; i < marketIds.length; i += 40) {
-      const batch = marketIds.slice(i, i + 40);
-      const books = await this.listMarketBook(batch);
-      results.push(...books);
+    for (let i = 0; i < marketIds.length; i += BATCH_SIZE) {
+      const batch = marketIds.slice(i, i + BATCH_SIZE);
+      try {
+        const books = await this.listMarketBook(batch);
+        results.push(...books);
+      } catch (error: unknown) {
+        const msg = error instanceof Error ? error.message : String(error);
+        console.warn(`[Betfair] Failed to fetch odds for batch ${Math.floor(i / BATCH_SIZE) + 1}: ${msg}`);
+      }
     }
     return results;
   }
