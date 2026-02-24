@@ -1,0 +1,542 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== USER & AUTH ====================
+
+model User {
+  id             String           @id @default(cuid())
+  email          String           @unique
+  name           String?
+  image          String?
+  passwordHash   String?
+  role           Role             @default(USER)
+  subscriptionTier SubscriptionTier @default(FREE)
+  emailVerified  DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  accounts       Account[]
+  sessions       Session[]
+  subscription   Subscription?
+  payments       Payment[]
+  watchlist      Watchlist[]
+  alertRules     AlertRule[]
+  alertHistory   AlertHistory[]
+  betJournal     BetJournalEntry[]
+  tips           Tip[]
+  chatMessages   ChatMessage[]
+  pushSubscriptions PushSubscription[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model Subscription {
+  id                  String             @id @default(cuid())
+  userId              String             @unique
+  tier                SubscriptionTier
+  status              SubStatus          @default(ACTIVE)
+  paymentMethod       PaymentMethodType?
+  paypalSubscriptionId String?
+  cryptoChargeId      String?
+  startDate           DateTime           @default(now())
+  endDate             DateTime?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Payment {
+  id            String            @id @default(cuid())
+  userId        String
+  amount        Float
+  currency      String            @default("AUD")
+  method        PaymentMethodType
+  status        PaymentStatus     @default(PENDING)
+  transactionId String?
+  metadata      Json?
+  createdAt     DateTime          @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ==================== RACING DATA ====================
+
+model RaceMeeting {
+  id        String   @id @default(cuid())
+  venue     String
+  date      DateTime @db.Date
+  type      RaceType
+  country   String   @default("AU")
+  createdAt DateTime @default(now())
+
+  races Race[]
+
+  @@unique([venue, date, type])
+}
+
+model Race {
+  id          String     @id @default(cuid())
+  meetingId   String
+  raceNumber  Int
+  name        String
+  distance    Int?       // meters
+  conditions  String?    // track condition (Firm, Good, Soft, Heavy)
+  weather     String?
+  startTime   DateTime
+  status      RaceStatus @default(UPCOMING)
+  resultJson  Json?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  meeting    RaceMeeting  @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  market     Market?
+  entries    RaceEntry[]
+  tips       Tip[]
+  betJournal BetJournalEntry[]
+  chatMessages ChatMessage[]
+
+  @@index([startTime, status])
+  @@index([meetingId])
+}
+
+model Runner {
+  id          String   @id @default(cuid())
+  name        String
+  type        RaceType
+  dateOfBirth DateTime? @db.Date
+  sire        String?
+  dam         String?
+  kennel      String?
+  imageUrl    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  entries      RaceEntry[]
+  oddsSnapshots OddsSnapshot[]
+  whaleBets    WhaleBet[]
+  fluctuations OddsFluctuation[]
+  stats        RunnerStat[]
+  watchlistItems Watchlist[] @relation("WatchlistRunner")
+
+  @@index([name, type])
+}
+
+model RaceEntry {
+  id              String  @id @default(cuid())
+  raceId          String
+  runnerId        String
+  barrierBox      Int?
+  weight          Float?
+  jockeyId        String?
+  trainerId       String?
+  handlerId       String?
+  finishPosition  Int?
+  result          String? // "1st", "2nd", "3rd", etc.
+  betfairSelectionId Int?
+  createdAt       DateTime @default(now())
+
+  race    Race     @relation(fields: [raceId], references: [id], onDelete: Cascade)
+  runner  Runner   @relation(fields: [runnerId], references: [id], onDelete: Cascade)
+  jockey  Jockey?  @relation(fields: [jockeyId], references: [id])
+  trainer Trainer? @relation(fields: [trainerId], references: [id])
+  handler Handler? @relation(fields: [handlerId], references: [id])
+
+  @@unique([raceId, runnerId])
+  @@index([raceId])
+  @@index([runnerId])
+}
+
+model Jockey {
+  id        String   @id @default(cuid())
+  name      String
+  stats     Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  entries RaceEntry[]
+  watchlistItems Watchlist[] @relation("WatchlistJockey")
+}
+
+model Trainer {
+  id        String   @id @default(cuid())
+  name      String
+  stats     Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  entries RaceEntry[]
+  watchlistItems Watchlist[] @relation("WatchlistTrainer")
+}
+
+model Handler {
+  id        String   @id @default(cuid())
+  name      String
+  stats     Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  entries RaceEntry[]
+}
+
+// ==================== ODDS & BETTING ====================
+
+model Market {
+  id              String       @id @default(cuid())
+  raceId          String       @unique
+  betfairMarketId String       @unique
+  totalMatched    Float        @default(0)
+  status          String       @default("OPEN")
+  inplay          Boolean      @default(false)
+  updatedAt       DateTime     @updatedAt
+
+  race         Race              @relation(fields: [raceId], references: [id], onDelete: Cascade)
+  oddsSnapshots OddsSnapshot[]
+  whaleBets    WhaleBet[]
+  fluctuations OddsFluctuation[]
+
+  @@index([betfairMarketId])
+  @@index([status])
+}
+
+model OddsSnapshot {
+  id            String   @id @default(cuid())
+  marketId      String
+  runnerId      String
+  backOdds      Float?
+  layOdds       Float?
+  volumeMatched Float    @default(0)
+  timestamp     DateTime @default(now())
+
+  market Market @relation(fields: [marketId], references: [id], onDelete: Cascade)
+  runner Runner @relation(fields: [runnerId], references: [id], onDelete: Cascade)
+
+  @@index([marketId, timestamp])
+  @@index([runnerId, timestamp])
+  @@index([timestamp])
+}
+
+model WhaleBet {
+  id        String   @id @default(cuid())
+  marketId  String
+  runnerId  String
+  amount    Float
+  odds      Float
+  betType   String?  // "BACK" or "LAY"
+  timestamp DateTime @default(now())
+
+  market Market @relation(fields: [marketId], references: [id], onDelete: Cascade)
+  runner Runner @relation(fields: [runnerId], references: [id], onDelete: Cascade)
+
+  @@index([timestamp])
+  @@index([marketId])
+  @@index([runnerId])
+}
+
+model OddsFluctuation {
+  id            String   @id @default(cuid())
+  marketId      String
+  runnerId      String
+  oldOdds       Float
+  newOdds       Float
+  percentChange Float
+  volumeDelta   Float    @default(0)
+  classification String? // "STEAMER", "DRIFTER"
+  timestamp     DateTime @default(now())
+
+  market Market @relation(fields: [marketId], references: [id], onDelete: Cascade)
+  runner Runner @relation(fields: [runnerId], references: [id], onDelete: Cascade)
+
+  @@index([timestamp])
+  @@index([marketId])
+  @@index([classification])
+}
+
+// ==================== USER FEATURES ====================
+
+model Watchlist {
+  id       String            @id @default(cuid())
+  userId   String
+  itemType WatchlistItemType
+  runnerId String?
+  trainerId String?
+  jockeyId String?
+  createdAt DateTime         @default(now())
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  runner  Runner?  @relation("WatchlistRunner", fields: [runnerId], references: [id])
+  trainer Trainer? @relation("WatchlistTrainer", fields: [trainerId], references: [id])
+  jockey  Jockey?  @relation("WatchlistJockey", fields: [jockeyId], references: [id])
+
+  @@unique([userId, itemType, runnerId])
+  @@index([userId])
+}
+
+model AlertRule {
+  id               String        @id @default(cuid())
+  userId           String
+  name             String
+  ruleType         AlertRuleType
+  conditions       Json
+  notifyChannels   Json          @default("[\"push\"]")
+  isActive         Boolean       @default(true)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  user    User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  history AlertHistory[]
+
+  @@index([userId, isActive])
+}
+
+model AlertHistory {
+  id          String    @id @default(cuid())
+  userId      String
+  alertRuleId String?
+  message     String
+  metadata    Json?
+  isRead      Boolean   @default(false)
+  timestamp   DateTime  @default(now())
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  alertRule AlertRule? @relation(fields: [alertRuleId], references: [id], onDelete: SetNull)
+
+  @@index([userId, isRead])
+  @@index([timestamp])
+}
+
+model BetJournalEntry {
+  id        String    @id @default(cuid())
+  userId    String
+  raceId    String?
+  runnerId  String?
+  runnerName String?
+  raceName  String?
+  stake     Float
+  odds      Float
+  betType   String    @default("BACK")
+  result    BetResult @default(PENDING)
+  profit    Float?
+  notes     String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  race Race? @relation(fields: [raceId], references: [id])
+
+  @@index([userId, createdAt])
+}
+
+model Tip {
+  id        String   @id @default(cuid())
+  userId    String
+  raceId    String
+  runnerId  String?
+  runnerName String?
+  reasoning String?
+  createdAt DateTime @default(now())
+
+  user   User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  race   Race       @relation(fields: [raceId], references: [id], onDelete: Cascade)
+  result TipResult?
+
+  @@index([userId])
+  @@index([raceId])
+}
+
+model TipResult {
+  id        String   @id @default(cuid())
+  tipId     String   @unique
+  isCorrect Boolean
+  profit    Float    @default(0)
+  createdAt DateTime @default(now())
+
+  tip Tip @relation(fields: [tipId], references: [id], onDelete: Cascade)
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  userId    String
+  raceId    String
+  message   String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  race Race @relation(fields: [raceId], references: [id], onDelete: Cascade)
+
+  @@index([raceId, createdAt])
+}
+
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ==================== ADMIN ====================
+
+model FeatureFlag {
+  id          String  @id @default(cuid())
+  feature     String  @unique
+  description String?
+  freeTier    Boolean @default(false)
+  proTier     Boolean @default(true)
+  premiumTier Boolean @default(true)
+  isActive    Boolean @default(true)
+}
+
+model AdminLog {
+  id        String   @id @default(cuid())
+  adminId   String
+  action    String
+  details   Json?
+  createdAt DateTime @default(now())
+
+  @@index([adminId])
+  @@index([createdAt])
+}
+
+// ==================== ANALYTICS CACHE ====================
+
+model RunnerStat {
+  id        String   @id @default(cuid())
+  runnerId  String
+  statType  String   // "condition", "distance", "box"
+  category  String   // "Good", "1200m", "Box 1"
+  races     Int      @default(0)
+  wins      Int      @default(0)
+  places    Int      @default(0)
+  avgFinish Float?
+  data      Json?
+  updatedAt DateTime @updatedAt
+
+  runner Runner @relation(fields: [runnerId], references: [id], onDelete: Cascade)
+
+  @@unique([runnerId, statType, category])
+  @@index([runnerId])
+}
+
+model TrackBias {
+  id         String @id @default(cuid())
+  venue      String
+  distance   Int?
+  position   Int    // barrier/box position
+  totalRaces Int    @default(0)
+  wins       Int    @default(0)
+  winRate    Float  @default(0)
+  updatedAt  DateTime @updatedAt
+
+  @@unique([venue, distance, position])
+  @@index([venue])
+}
+
+// ==================== ENUMS ====================
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum SubscriptionTier {
+  FREE
+  PRO
+  PREMIUM
+}
+
+enum SubStatus {
+  ACTIVE
+  CANCELLED
+  EXPIRED
+  PAST_DUE
+}
+
+enum PaymentMethodType {
+  PAYPAL
+  CRYPTO
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+enum RaceType {
+  HORSE
+  DOG
+}
+
+enum RaceStatus {
+  UPCOMING
+  LIVE
+  RESULTED
+  ABANDONED
+}
+
+enum AlertRuleType {
+  ODDS_MOVEMENT
+  WHALE_BET
+  RUNNER_IN_RACE
+  STEAMER_DRIFTER
+  RACE_STARTING
+}
+
+enum WatchlistItemType {
+  RUNNER
+  TRAINER
+  JOCKEY
+}
+
+enum BetResult {
+  WIN
+  LOSS
+  VOID
+  PENDING
+}

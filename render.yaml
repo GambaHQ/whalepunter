@@ -1,0 +1,93 @@
+databases:
+  - name: whalepunter-db
+    plan: free
+    databaseName: whalepunter
+    user: whalepunter
+
+services:
+  # Main Next.js web application
+  - type: web
+    name: whalepunter-web
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build:render
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 20.18.0
+      - key: DATABASE_URL
+        fromDatabase:
+          name: whalepunter-db
+          property: connectionString
+      - key: NEXTAUTH_SECRET
+        generateValue: true
+      - key: NEXTAUTH_URL
+        sync: false
+      - key: NEXT_PUBLIC_WS_URL
+        sync: false
+      - key: BETFAIR_APP_KEY
+        sync: false
+      - key: BETFAIR_USERNAME
+        sync: false
+      - key: BETFAIR_PASSWORD
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      - key: PAYPAL_WEBHOOK_ID
+        sync: false
+      - key: COINBASE_COMMERCE_API_KEY
+        sync: false
+      - key: COINBASE_COMMERCE_WEBHOOK_SECRET
+        sync: false
+
+  # WebSocket server for real-time updates
+  - type: web
+    name: whalepunter-ws
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm run ws-server
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 20.18.0
+      - key: WS_PORT
+        value: 10000
+      - key: NEXT_PUBLIC_APP_URL
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: whalepunter-db
+          property: connectionString
+
+  # Background worker for Betfair polling and data processing
+  - type: worker
+    name: whalepunter-worker
+    runtime: node
+    plan: free
+    buildCommand: npm install && npx prisma generate
+    startCommand: npm run workers
+    envVars:
+      - key: NODE_VERSION
+        value: 20.18.0
+      - key: DATABASE_URL
+        fromDatabase:
+          name: whalepunter-db
+          property: connectionString
+      - key: BETFAIR_APP_KEY
+        sync: false
+      - key: BETFAIR_USERNAME
+        sync: false
+      - key: BETFAIR_PASSWORD
+        sync: false
+      - key: REDIS_URL
+        sync: false
