@@ -76,6 +76,7 @@ services:
   - type: worker
     name: whalepunter-worker
     runtime: node
+    region: singapore
     plan: starter
     buildCommand: npm install && npx prisma generate
     startCommand: npm run workers
