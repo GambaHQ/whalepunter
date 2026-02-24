@@ -95,6 +95,9 @@ async function pollLoop(client: ReturnType<typeof getBetfairClient>) {
         await processOdds(marketBooks);
       }
 
+      // Check for settled races and fetch results
+      await fetchAndProcessResults(client);
+
       // Determine next poll interval based on proximity of next race
       const nextRaceTime = getNextRaceTime([...horseRaces, ...dogRaces]);
       const interval =
@@ -287,6 +290,119 @@ function getNextRaceTime(catalogues: MarketCatalogue[]): number | null {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchAndProcessResults(client: ReturnType<typeof getBetfairClient>) {
+  try {
+    console.log("[Poller] Checking for race results...");
+
+    // Find races that are LIVE or UPCOMING but started > 10 minutes ago (should be finished)
+    const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+    const racesNeedingResults = await prisma.race.findMany({
+      where: {
+        status: { in: ["UPCOMING", "LIVE"] },
+        startTime: { lt: tenMinutesAgo },
+      },
+      include: {
+        market: true,
+        entries: true,
+      },
+      take: 50,
+    });
+
+    if (racesNeedingResults.length === 0) {
+      return;
+    }
+
+    console.log(`[Poller] Found ${racesNeedingResults.length} races to check for results`);
+
+    // Get market IDs that need results
+    const marketIds = racesNeedingResults
+      .filter((r) => r.market)
+      .map((r) => r.market!.betfairMarketId);
+
+    if (marketIds.length === 0) return;
+
+    // Fetch market books to get status
+    const marketBooks = await client.getMarketResults(marketIds);
+
+    for (const book of marketBooks) {
+      // Find the race for this market
+      const race = racesNeedingResults.find(
+        (r) => r.market?.betfairMarketId === book.marketId
+      );
+      if (!race) continue;
+
+      // Check if market is closed (race finished)
+      if (book.status === "CLOSED") {
+        console.log(`[Poller] Processing results for ${race.name}`);
+
+        // Process runner results
+        let hasResults = false;
+        for (const runner of book.runners) {
+          const runnerId = `runner-${runner.selectionId}`;
+          
+          // Determine finish position from status
+          let finishPosition: number | null = null;
+          let resultText: string | null = null;
+
+          if (runner.status === "WINNER") {
+            finishPosition = 1;
+            resultText = "1st";
+            hasResults = true;
+          } else if (runner.status === "PLACED") {
+            // For placed runners, we can't determine exact position from API
+            // Use the adjustment factor if available (lower = better placing)
+            finishPosition = 2; // Default to 2nd for placed
+            resultText = "Placed";
+            hasResults = true;
+          } else if (runner.status === "LOSER") {
+            // Mark as finished but not placed
+            finishPosition = 99; // Unplaced
+            resultText = "Unplaced";
+            hasResults = true;
+          }
+
+          if (finishPosition !== null) {
+            await prisma.raceEntry.updateMany({
+              where: {
+                raceId: race.id,
+                runnerId,
+              },
+              data: {
+                finishPosition,
+                result: resultText,
+              },
+            });
+          }
+        }
+
+        // Update race status
+        if (hasResults) {
+          await prisma.race.update({
+            where: { id: race.id },
+            data: { status: "RESULTED" },
+          });
+
+          // Update market status
+          await prisma.market.update({
+            where: { id: race.market!.id },
+            data: { status: "CLOSED" },
+          });
+
+          console.log(`[Poller] Results saved for ${race.name}`);
+        }
+      } else if (book.status === "SUSPENDED" || book.inplay) {
+        // Race is live/in-play
+        await prisma.race.update({
+          where: { id: race.id },
+          data: { status: "LIVE" },
+        });
+      }
+    }
+  } catch (error) {
+    console.error("[Poller] Error fetching results:", error);
+  }
 }
 
 export function stopBetfairPoller() {

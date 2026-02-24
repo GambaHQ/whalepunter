@@ -230,6 +230,52 @@ export class BetfairClient {
     return results;
   }
 
+  async getSettledRaces(
+    eventTypeId: string,
+    countries?: string[]
+  ): Promise<MarketCatalogue[]> {
+    // Fetch races that started in the last 6 hours (should be settled)
+    const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000);
+    const now = new Date();
+
+    const filter: MarketFilter = {
+      eventTypeIds: [eventTypeId],
+      marketTypeCodes: ["WIN"],
+      marketStartTime: {
+        from: sixHoursAgo.toISOString(),
+        to: now.toISOString(),
+      },
+    };
+
+    if (countries && countries.length > 0) {
+      filter.marketCountries = countries;
+    }
+
+    return this.listMarketCatalogue(filter, 200);
+  }
+
+  async getMarketResults(marketIds: string[]): Promise<MarketBook[]> {
+    // Fetch market book without price data, just to get runner status
+    const BATCH_SIZE = 20; // Can use larger batches without price data
+    const results: MarketBook[] = [];
+    for (let i = 0; i < marketIds.length; i += BATCH_SIZE) {
+      const batch = marketIds.slice(i, i + BATCH_SIZE);
+      try {
+        await this.rateLimit();
+        const response = await this.httpClient.post(
+          "/listMarketBook/",
+          { marketIds: batch },
+          { headers: this.getHeaders() }
+        );
+        results.push(...response.data);
+      } catch (error: unknown) {
+        const msg = error instanceof Error ? error.message : String(error);
+        console.warn(`[Betfair] Failed to fetch results for batch: ${msg}`);
+      }
+    }
+    return results;
+  }
+
   async keepAlive(): Promise<boolean> {
     try {
       const response = await axios.get(
