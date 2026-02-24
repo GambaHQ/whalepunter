@@ -56,7 +56,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     }),
   ],
   callbacks: {
-    async jwt({ token, user }) {
+    async jwt({ token, user, trigger }) {
       if (user) {
         const dbUser = await prisma.user.findUnique({
           where: { email: token.email! },
@@ -65,6 +65,16 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         if (dbUser) {
           token.id = dbUser.id;
           token.role = dbUser.role;
+          token.subscriptionTier = dbUser.subscriptionTier;
+        }
+      }
+      // Refresh subscription tier periodically (every request checks DB)
+      if (token.email && !user) {
+        const dbUser = await prisma.user.findUnique({
+          where: { email: token.email },
+          select: { subscriptionTier: true },
+        });
+        if (dbUser) {
           token.subscriptionTier = dbUser.subscriptionTier;
         }
       }
