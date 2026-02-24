@@ -10,6 +10,9 @@ export const metadata: Metadata = {
   description:
     "Track whale bets, live odds fluctuations, and smart money movements on horse racing and greyhound racing via Betfair Exchange.",
   keywords: ["horse racing", "greyhound racing", "betting analytics", "Betfair", "whale bets", "odds tracker"],
+  icons: {
+    icon: "/favicon.ico",
+  },
 };
 
 export default function RootLayout({
