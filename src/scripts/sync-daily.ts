@@ -8,9 +8,9 @@
  */
 
 import { PrismaClient } from "@prisma/client";
-import { fetchTopazDay } from "../lib/topaz/client";
+import { getTopazClient } from "../lib/topaz/client";
 import { getPuntingFormClient } from "../lib/puntingform/client";
-import type { TopazRun } from "../types/topaz";
+import type { TopazBulkRun } from "../types/topaz";
 import type { PFMeeting, PFRunner } from "../types/puntingform";
 
 const prisma = new PrismaClient();
@@ -35,7 +35,9 @@ async function main() {
   if (process.env.TOPAZ_API_KEY) {
     try {
       console.log("[Sync] Fetching greyhound results...");
-      const runs = await fetchTopazDay(dateStr);
+      const client = getTopazClient();
+      const [y, m, d] = dateStr.split("-").map(Number);
+      const runs = await client.getAllBulkRunsByDay(y, m, d);
       dogCount = await processGreyhoundRuns(runs, dateStr);
       console.log(`[Sync] Imported ${dogCount} greyhound entries`);
     } catch (error) {
@@ -76,14 +78,16 @@ async function main() {
   console.log(`\n=== Sync Complete: ${dogCount} dogs, ${horseCount} horses ===`);
 }
 
-async function processGreyhoundRuns(runs: TopazRun[], dateStr: string): Promise<number> {
+async function processGreyhoundRuns(runs: TopazBulkRun[], dateStr: string): Promise<number> {
   let count = 0;
-  const meetingDate = new Date(dateStr);
-  meetingDate.setHours(0, 0, 0, 0);
+  const meetingDate = new Date(dateStr + "T00:00:00Z");
+
+  // Filter scratched
+  const activeRuns = runs.filter((r) => !r.scratched);
 
   // Group by race
-  const raceGroups = new Map<string, TopazRun[]>();
-  for (const run of runs) {
+  const raceGroups = new Map<string, TopazBulkRun[]>();
+  for (const run of activeRuns) {
     const key = `${run.trackCode}|${run.raceNumber}`;
     const group = raceGroups.get(key) || [];
     group.push(run);
@@ -110,23 +114,21 @@ async function processGreyhoundRuns(runs: TopazRun[], dateStr: string): Promise<
       },
     });
 
-    const externalRaceId = `topaz-${first.trackCode}-${dateStr}-R${first.raceNumber}`;
+    const externalRaceId = `topaz-${first.raceId}`;
     const raceStartTime = new Date(meetingDate);
     raceStartTime.setHours(12 + Math.floor(first.raceNumber / 3));
 
     const race = await prisma.race.upsert({
       where: { externalId: externalRaceId },
       update: {
-        distance: first.raceDistance || undefined,
-        conditions: first.trackCondition || undefined,
+        distance: first.distanceInMetres || undefined,
         status: "RESULTED",
       },
       create: {
         meetingId: meeting.id,
         raceNumber: first.raceNumber,
         name: `R${first.raceNumber} ${first.trackName || first.trackCode}`,
-        distance: first.raceDistance || null,
-        conditions: first.trackCondition || null,
+        distance: first.distanceInMetres || null,
         startTime: raceStartTime,
         status: "RESULTED",
         externalId: externalRaceId,
@@ -135,9 +137,7 @@ async function processGreyhoundRuns(runs: TopazRun[], dateStr: string): Promise<
     });
 
     for (const run of raceRuns) {
-      const externalRunnerId = run.dogId
-        ? `topaz-dog-${run.dogId}`
-        : `topaz-dog-${run.dogName.toLowerCase().replace(/\s+/g, "-")}`;
+      const externalRunnerId = `topaz-dog-${run.dogId}`;
 
       // Check alias first for already-reconciled runners
       const alias = await prisma.runnerAlias.findFirst({
@@ -172,7 +172,7 @@ async function processGreyhoundRuns(runs: TopazRun[], dateStr: string): Promise<
       await prisma.raceEntry.upsert({
         where: { raceId_runnerId: { raceId: race.id, runnerId } },
         update: {
-          barrierBox: run.box || undefined,
+          barrierBox: run.boxNumber || undefined,
           weight: run.weightInKg || undefined,
           finishPosition: run.place || undefined,
           result: formatResult(run.place),
@@ -181,7 +181,7 @@ async function processGreyhoundRuns(runs: TopazRun[], dateStr: string): Promise<
         create: {
           raceId: race.id,
           runnerId,
-          barrierBox: run.box || null,
+          barrierBox: run.boxNumber || null,
           weight: run.weightInKg || null,
           finishPosition: run.place || null,
           result: formatResult(run.place),
