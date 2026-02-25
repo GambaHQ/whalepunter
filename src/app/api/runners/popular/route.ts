@@ -28,28 +28,10 @@ export async function GET() {
           },
         },
         entries: {
-          take: 1,
+          where: { finishPosition: { not: null } },
           orderBy: { race: { startTime: "desc" } },
-          select: {
-            race: {
-              select: {
-                id: true,
-                name: true,
-                startTime: true,
-                meeting: {
-                  select: { venue: true },
-                },
-              },
-            },
-          },
-        },
-        oddsSnapshots: {
-          take: 1,
-          orderBy: { timestamp: "desc" },
-          select: {
-            backOdds: true,
-            volumeMatched: true,
-          },
+          take: 5,
+          select: { finishPosition: true },
         },
       },
       orderBy: {
@@ -58,27 +40,77 @@ export async function GET() {
       take: 10,
     });
 
-    const formatted = popularRunners.map((runner) => ({
-      id: runner.id,
-      name: runner.name,
-      type: runner.type,
-      imageUrl: runner.imageUrl,
-      activityCount: runner._count.oddsSnapshots,
-      latestRace: runner.entries[0]?.race
-        ? {
-            id: runner.entries[0].race.id,
-            name: runner.entries[0].race.name,
-            venue: runner.entries[0].race.meeting.venue,
-            startTime: runner.entries[0].race.startTime,
-          }
-        : null,
-      latestOdds: runner.oddsSnapshots[0]?.backOdds ?? null,
-      volumeMatched: runner.oddsSnapshots[0]?.volumeMatched ?? 0,
-    }));
+    // Calculate stats from entries
+    const formatted = popularRunners.map((runner) => {
+      const completedRaces = runner.entries;
+      const totalRaces = completedRaces.length;
+      const wins = completedRaces.filter((e) => e.finishPosition === 1).length;
+      const winRate = totalRaces > 0 ? (wins / totalRaces) * 100 : 0;
+      const recentForm = completedRaces
+        .map((e) => e.finishPosition?.toString() || "X")
+        .join("");
 
-    return NextResponse.json({ runners: formatted });
+      return {
+        id: runner.id,
+        name: runner.name,
+        type: runner.type,
+        stats: {
+          totalRaces,
+          wins,
+          winRate,
+          recentForm,
+        },
+      };
+    });
+
+    // If no recent activity, fall back to runners with most entries
+    if (formatted.length === 0) {
+      const fallbackRunners = await prisma.runner.findMany({
+        select: {
+          id: true,
+          name: true,
+          type: true,
+          entries: {
+            where: { finishPosition: { not: null } },
+            orderBy: { race: { startTime: "desc" } },
+            take: 10,
+            select: { finishPosition: true },
+          },
+          _count: { select: { entries: true } },
+        },
+        orderBy: { entries: { _count: "desc" } },
+        take: 10,
+      });
+
+      const fallbackFormatted = fallbackRunners.map((runner) => {
+        const completedRaces = runner.entries;
+        const totalRaces = completedRaces.length;
+        const wins = completedRaces.filter((e) => e.finishPosition === 1).length;
+        const winRate = totalRaces > 0 ? (wins / totalRaces) * 100 : 0;
+        const recentForm = completedRaces
+          .slice(0, 5)
+          .map((e) => e.finishPosition?.toString() || "X")
+          .join("");
+
+        return {
+          id: runner.id,
+          name: runner.name,
+          type: runner.type,
+          stats: {
+            totalRaces: runner._count.entries,
+            wins,
+            winRate,
+            recentForm,
+          },
+        };
+      });
+
+      return NextResponse.json(fallbackFormatted);
+    }
+
+    return NextResponse.json(formatted);
   } catch (error) {
     console.error("Error fetching popular runners:", error);
-    return NextResponse.json({ runners: [] });
+    return NextResponse.json([]);
   }
 }
