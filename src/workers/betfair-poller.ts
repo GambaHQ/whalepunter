@@ -243,6 +243,14 @@ async function processOdds(marketBooks: MarketBook[]) {
         const runnerId = `runner-${runner.selectionId}`;
         const backOdds = getBestBack(runner);
         const layOdds = getBestLay(runner);
+        
+        // Calculate volume from tradedVolume array if totalMatched is 0
+        // tradedVolume contains [{price, size}] entries for all trades
+        const tradedVolumeSum = runner.ex?.tradedVolume?.reduce(
+          (sum, pv) => sum + pv.size, 
+          0
+        ) || 0;
+        const volumeMatched = runner.totalMatched || tradedVolumeSum;
 
         await prisma.oddsSnapshot.create({
           data: {
@@ -250,7 +258,7 @@ async function processOdds(marketBooks: MarketBook[]) {
             runnerId,
             backOdds,
             layOdds,
-            volumeMatched: runner.totalMatched || 0,
+            volumeMatched,
           },
         });
       }
