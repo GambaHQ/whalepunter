@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -221,6 +222,7 @@ export default function RunnerComparePage() {
           <DialogContent className="sm:max-w-md">
             <DialogHeader>
               <DialogTitle>Add Runner to Compare</DialogTitle>
+              <DialogDescription>Search for a runner to add to the comparison.</DialogDescription>
             </DialogHeader>
             <div className="space-y-4">
               <div className="relative">

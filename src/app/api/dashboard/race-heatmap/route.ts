@@ -86,6 +86,14 @@ export async function GET(req: Request) {
     if (betfairMarketIds.length > 0) {
       try {
         const client = getBetfairClient();
+        // Authenticate if not already (web server process may not be logged in)
+        if (!client.isAuthenticated()) {
+          const username = process.env.BETFAIR_USERNAME;
+          const password = process.env.BETFAIR_PASSWORD;
+          if (username && password) {
+            await client.login(username, password);
+          }
+        }
         if (client.isAuthenticated()) {
           marketBooks = await client.getMarketOdds(betfairMarketIds);
         }
