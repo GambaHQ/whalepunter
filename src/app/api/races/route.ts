@@ -47,6 +47,11 @@ export async function GET(req: Request) {
             country: true,
           },
         },
+        market: {
+          select: {
+            totalMatched: true,
+          },
+        },
         _count: {
           select: {
             entries: true,
@@ -67,10 +72,13 @@ export async function GET(req: Request) {
       startTime: race.startTime.toISOString(),
       status: race.status,
       venue: race.meeting.venue,
+      meetingName: race.meeting.venue,
       meetingDate: race.meeting.date.toISOString(),
+      type: race.meeting.type.toLowerCase() as "horse" | "dog",
       raceType: race.meeting.type,
       country: race.meeting.country,
       runnerCount: race._count.entries,
+      totalVolume: race.market?.totalMatched ?? 0,
     }));
 
     return NextResponse.json(raceList);
