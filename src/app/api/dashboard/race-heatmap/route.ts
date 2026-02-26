@@ -124,11 +124,15 @@ export async function GET(req: Request) {
           0
         );
 
+        const runnerCount = runnersWithOdds.length;
+
         // Estimate volume per runner based on implied probability share of market total
+        // Falls back to even distribution if no odds data available
         const runnersWithPercentage = runnersWithImpliedProb.map((runner) => {
+          // Use odds-based distribution if available, otherwise distribute evenly
           const volumeShare = totalImpliedProb > 0 
             ? runner.impliedProb / totalImpliedProb 
-            : 0;
+            : runnerCount > 0 ? 1 / runnerCount : 0;
           const estimatedVolume = marketTotalMatched * volumeShare;
           return {
             runnerId: runner.runnerId,

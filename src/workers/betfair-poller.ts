@@ -124,22 +124,19 @@ async function pollLoop(client: ReturnType<typeof getBetfairClient>) {
       await processRaces(horseRaces, "HORSE");
       await processRaces(dogRaces, "DOG");
 
-      // Fetch odds for active markets NOT handled by the stream
+      // Fetch odds for all active markets
+      // Always fetch even if stream is active - ensures we have baseline odds data
       const allMarketIds = [
         ...horseRaces.map((r) => r.marketId),
         ...dogRaces.map((r) => r.marketId),
-      ].filter((id) => !streamedMarketIds.has(id));
+      ];
 
       if (allMarketIds.length > 0) {
         console.log(
-          `[Poller] Fetching odds for ${allMarketIds.length} markets (${streamedMarketIds.size} handled by stream)`
+          `[Poller] Fetching odds for ${allMarketIds.length} markets`
         );
         const marketBooks = await client.getMarketOdds(allMarketIds);
         await processOdds(marketBooks);
-      } else if (streamedMarketIds.size > 0) {
-        console.log(
-          `[Poller] All ${streamedMarketIds.size} markets handled by stream, skipping odds poll`
-        );
       }
 
       // Check for settled races and fetch results
