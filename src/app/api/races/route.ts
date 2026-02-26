@@ -9,10 +9,14 @@ export async function GET(req: Request) {
     const limitParam = searchParams.get("limit");
     const limit = limitParam ? parseInt(limitParam, 10) : 50;
 
-    // Build where clause
+    // Build where clause - include recent races (past 4h) and upcoming (next 8h)
+    const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000);
+    const eightHoursLater = new Date(Date.now() + 8 * 60 * 60 * 1000);
+
     const where: any = {
       startTime: {
-        gte: new Date(), // Only upcoming races
+        gte: fourHoursAgo,
+        lte: eightHoursLater,
       },
     };
 
