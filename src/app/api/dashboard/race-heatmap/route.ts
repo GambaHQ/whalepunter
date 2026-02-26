@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth/config";
 import { prisma } from "@/lib/db/prisma";
 import { checkFeatureAccess } from "@/lib/auth/permissions";
+import { getBetfairClient } from "@/lib/betfair/client";
+import type { MarketBook, RunnerBook } from "@/types/betfair";
 
 export async function GET(req: Request) {
   try {
@@ -21,8 +23,6 @@ export async function GET(req: Request) {
     }
 
     // Get upcoming races in the next 2 hours AND recent races from the past 4 hours
-    // Extended lookback window ensures we show dog races even during scheduling gaps
-    // (Australian dog racing typically runs 6PM-11PM AEDT = 7AM-12PM UTC)
     const now = new Date();
     const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000);
     const twoHoursLater = new Date(Date.now() + 2 * 60 * 60 * 1000);
@@ -34,11 +34,11 @@ export async function GET(req: Request) {
     const upcomingRaces = await prisma.race.findMany({
       where: {
         startTime: {
-          gte: fourHoursAgo, // Include races from past 4 hours
+          gte: fourHoursAgo,
           lte: twoHoursLater,
         },
         status: {
-          in: ["UPCOMING", "LIVE", "RESULTED"], // Include recently finished races
+          in: ["UPCOMING", "LIVE", "RESULTED"],
         },
         ...(typeFilter && {
           meeting: {
@@ -60,6 +60,7 @@ export async function GET(req: Request) {
         market: {
           select: {
             id: true,
+            betfairMarketId: true,
             totalMatched: true,
           },
         },
@@ -76,96 +77,135 @@ export async function GET(req: Request) {
       },
     });
 
-    // For each race, get latest odds and volume per runner
-    const raceHeatmapData = await Promise.all(
-      upcomingRaces.map(async (race) => {
-        if (!race.market) {
-          return null;
+    // Fetch live per-runner volume from Betfair API for all visible markets
+    const betfairMarketIds = upcomingRaces
+      .filter((r) => r.market?.betfairMarketId)
+      .map((r) => r.market!.betfairMarketId);
+
+    let marketBooks: MarketBook[] = [];
+    if (betfairMarketIds.length > 0) {
+      try {
+        const client = getBetfairClient();
+        if (client.isAuthenticated()) {
+          marketBooks = await client.getMarketOdds(betfairMarketIds);
         }
+      } catch (error) {
+        console.warn("[Heatmap] Failed to fetch live odds from Betfair:", error);
+      }
+    }
 
-        // Get latest odds snapshot for each runner in the race
-        const runnersWithOdds = await Promise.all(
-          race.entries.map(async (entry) => {
-            const latestOdds = await prisma.oddsSnapshot.findFirst({
-              where: {
-                marketId: race.market!.id,
-                runnerId: entry.runnerId,
-              },
-              orderBy: {
-                timestamp: "desc",
-              },
-            });
+    // Build a lookup: betfairMarketId -> MarketBook
+    const marketBookMap = new Map<string, MarketBook>();
+    for (const book of marketBooks) {
+      marketBookMap.set(book.marketId, book);
+    }
 
-            return {
-              runnerId: entry.runnerId,
-              runnerName: entry.runner.name,
-              barrierBox: entry.barrierBox,
-              backOdds: latestOdds?.backOdds ?? null,
-              layOdds: latestOdds?.layOdds ?? null,
-              volumeMatched: latestOdds?.volumeMatched ?? 0,
-            };
-          })
-        );
+    // Build heatmap data for each race
+    const raceHeatmapData = upcomingRaces.map((race) => {
+      if (!race.market) return null;
 
-        // Use market-level totalMatched as the total volume
-        const marketTotalMatched = race.market.totalMatched || 0;
+      const book = marketBookMap.get(race.market.betfairMarketId);
+      // Use live totalMatched from market book if available, else DB value
+      const marketTotalMatched = book?.totalMatched || race.market.totalMatched || 0;
 
-        // Calculate implied probability from odds to estimate volume distribution
-        // Shorter odds (favorites) typically attract more money
-        const runnersWithImpliedProb = runnersWithOdds.map((runner) => {
-          const impliedProb = runner.backOdds && runner.backOdds > 0 
-            ? 1 / runner.backOdds 
-            : 0;
-          return { ...runner, impliedProb };
-        });
+      // Build a map of selectionId -> RunnerBook for quick lookup
+      const runnerBookMap = new Map<number, RunnerBook>();
+      if (book) {
+        for (const rb of book.runners) {
+          runnerBookMap.set(rb.selectionId, rb);
+        }
+      }
 
-        const totalImpliedProb = runnersWithImpliedProb.reduce(
-          (sum, r) => sum + r.impliedProb,
+      // Map runners with live data
+      const runnersWithVolume = race.entries.map((entry) => {
+        const rb = entry.betfairSelectionId
+          ? runnerBookMap.get(entry.betfairSelectionId)
+          : undefined;
+
+        const backOdds = rb?.ex?.availableToBack?.[0]?.price ?? rb?.lastPriceTraded ?? null;
+        const layOdds = rb?.ex?.availableToLay?.[0]?.price ?? null;
+
+        // Per-runner volume from live data
+        const tradedVolumeSum = rb?.ex?.tradedVolume?.reduce(
+          (sum, pv) => sum + pv.size,
           0
-        );
-
-        const runnerCount = runnersWithOdds.length;
-
-        // Estimate volume per runner based on implied probability share of market total
-        // Falls back to even distribution if no odds data available
-        const runnersWithPercentage = runnersWithImpliedProb.map((runner) => {
-          // Use odds-based distribution if available, otherwise distribute evenly
-          const volumeShare = totalImpliedProb > 0 
-            ? runner.impliedProb / totalImpliedProb 
-            : runnerCount > 0 ? 1 / runnerCount : 0;
-          const estimatedVolume = marketTotalMatched * volumeShare;
-          return {
-            runnerId: runner.runnerId,
-            runnerName: runner.runnerName,
-            barrierBox: runner.barrierBox,
-            backOdds: runner.backOdds,
-            layOdds: runner.layOdds,
-            // Use actual volume if available, otherwise use estimated
-            volumeMatched: runner.volumeMatched > 0 ? runner.volumeMatched : estimatedVolume,
-            volumePercentage: volumeShare * 100,
-          };
-        });
-
-        // Determine if race is in the past (recent) vs upcoming
-        const isRecent = race.startTime < now;
+        ) || 0;
+        const runnerVolume = rb?.totalMatched || tradedVolumeSum;
 
         return {
-          raceId: race.id,
-          raceName: race.name,
-          raceNumber: race.raceNumber,
-          venue: race.meeting.venue,
-          raceType: race.meeting.type,
-          startTime: race.startTime.toISOString(),
-          status: race.status,
-          isRecent, // true if race already started/finished
-          totalMatched: marketTotalMatched,
-          totalVolume: marketTotalMatched,
-          runners: runnersWithPercentage,
+          runnerId: entry.runnerId,
+          runnerName: entry.runner.name,
+          barrierBox: entry.barrierBox,
+          backOdds,
+          layOdds,
+          volumeMatched: runnerVolume,
         };
-      })
-    );
+      });
 
-    // Filter out null values (races without markets)
+      // Calculate total volume across all runners (for percentage calculation)
+      const totalRunnerVolume = runnersWithVolume.reduce(
+        (sum, r) => sum + r.volumeMatched,
+        0
+      );
+
+      // If we have per-runner volume data, use actual percentages
+      // Otherwise estimate from odds implied probability
+      const hasLiveVolume = totalRunnerVolume > 0;
+      const runnerCount = runnersWithVolume.length;
+
+      const runnersWithPercentage = runnersWithVolume.map((runner) => {
+        let volumePercentage: number;
+        let displayVolume: number;
+
+        if (hasLiveVolume) {
+          // Use actual per-runner volume from Betfair
+          volumePercentage = totalRunnerVolume > 0
+            ? (runner.volumeMatched / totalRunnerVolume) * 100
+            : 0;
+          displayVolume = runner.volumeMatched;
+        } else if (runner.backOdds && runner.backOdds > 0) {
+          // Estimate from odds implied probability
+          const impliedProb = 1 / runner.backOdds;
+          const totalImplied = runnersWithVolume.reduce(
+            (sum, r) => sum + (r.backOdds && r.backOdds > 0 ? 1 / r.backOdds : 0),
+            0
+          );
+          volumePercentage = totalImplied > 0 ? (impliedProb / totalImplied) * 100 : 0;
+          displayVolume = marketTotalMatched * (volumePercentage / 100);
+        } else {
+          // Fallback: even distribution
+          volumePercentage = runnerCount > 0 ? 100 / runnerCount : 0;
+          displayVolume = runnerCount > 0 ? marketTotalMatched / runnerCount : 0;
+        }
+
+        return {
+          runnerId: runner.runnerId,
+          runnerName: runner.runnerName,
+          barrierBox: runner.barrierBox,
+          backOdds: runner.backOdds,
+          layOdds: runner.layOdds,
+          volumeMatched: displayVolume,
+          volumePercentage,
+        };
+      });
+
+      const isRecent = race.startTime < now;
+
+      return {
+        raceId: race.id,
+        raceName: race.name,
+        raceNumber: race.raceNumber,
+        venue: race.meeting.venue,
+        raceType: race.meeting.type,
+        startTime: race.startTime.toISOString(),
+        status: race.status,
+        isRecent,
+        totalMatched: marketTotalMatched,
+        totalVolume: marketTotalMatched,
+        runners: runnersWithPercentage,
+      };
+    });
+
     const validHeatmapData = raceHeatmapData.filter((data) => data !== null);
 
     return NextResponse.json(validHeatmapData);
