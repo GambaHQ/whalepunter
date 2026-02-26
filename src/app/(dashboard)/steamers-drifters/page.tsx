@@ -1,9 +1,11 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useEffect } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Flame, TrendingUp, TrendingDown, Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { useWebSocket } from "@/lib/websocket/client";
 import Link from "next/link";
 
 interface SteamerDrifter {
@@ -41,11 +43,55 @@ function formatTime(isoString: string): string {
 }
 
 export default function SteamersDriftersPage() {
+  const queryClient = useQueryClient();
+  const { isConnected, on } = useWebSocket();
+
   const { data, isLoading, error } = useQuery({
-    queryKey: ["steamers-drifters"],
+    queryKey: ["steamers-drifters-page"],
     queryFn: fetchSteamersDrifters,
-    refetchInterval: 30000,
+    refetchInterval: isConnected ? 60000 : 30000,
   });
+
+  // Real-time: add new steamers/drifters from WebSocket
+  useEffect(() => {
+    const unsub = on("fluctuation-alert", (data: unknown) => {
+      const d = data as Record<string, unknown>;
+      const newEntry: SteamerDrifter = {
+        runnerId: String(d?.runnerId || ""),
+        runnerName: String(d?.runnerName || "Unknown"),
+        runnerType: String(d?.runnerType || "HORSE"),
+        marketId: String(d?.marketId || ""),
+        raceName: String(d?.raceName || ""),
+        raceNumber: Number(d?.raceNumber || 0),
+        venue: String(d?.venue || ""),
+        startTime: String(d?.startTime || new Date().toISOString()),
+        classification:
+          d?.classification === "steamer" || d?.classification === "STEAMER"
+            ? "STEAMER"
+            : "DRIFTER",
+        oldOdds: Number(d?.oldOdds || d?.oddsBefore || 0),
+        newOdds: Number(d?.newOdds || d?.oddsAfter || 0),
+        percentChange: Number(d?.percentChange || d?.percentageChange || 0),
+        volumeDelta: Number(d?.volumeDelta || 0),
+        timestamp: new Date().toISOString(),
+      };
+      queryClient.setQueryData<SteamerDrifter[]>(["steamers-drifters-page"], (old) => {
+        if (!old) return [newEntry];
+        const existing = old.findIndex(
+          (r) => r.runnerName === newEntry.runnerName && r.venue === newEntry.venue
+        );
+        const updated = [...old];
+        if (existing >= 0) {
+          updated[existing] = newEntry;
+        } else {
+          updated.unshift(newEntry);
+        }
+        return updated.slice(0, 40);
+      });
+    });
+
+    return () => unsub();
+  }, [on, queryClient]);
 
   const steamers = data?.filter((d) => d.classification === "STEAMER") || [];
   const drifters = data?.filter((d) => d.classification === "DRIFTER") || [];

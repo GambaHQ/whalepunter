@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useState, useMemo, useEffect } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams, useRouter } from "next/navigation";
 import { RaceCard } from "@/components/races/RaceCard";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { AlertCircle, Loader2 } from "lucide-react";
+import { useWebSocket } from "@/lib/websocket/client";
 
 type RaceType = "all" | "horse" | "dog";
 type RaceStatus = "all" | "UPCOMING" | "LIVE" | "RESULTED";
@@ -42,11 +43,53 @@ export default function RacesPage() {
   const [raceType, setRaceType] = useState<RaceType>(typeParam);
   const [raceStatus, setRaceStatus] = useState<RaceStatus>(statusParam);
 
+  const queryClient = useQueryClient();
+  const { isConnected, on } = useWebSocket();
+
   const { data: races, isLoading, error, refetch } = useQuery({
     queryKey: ["races"],
     queryFn: fetchRaces,
-    refetchInterval: 30000, // Auto-refresh every 30 seconds
+    refetchInterval: isConnected ? 60000 : 30000,
   });
+
+  // Real-time: update race status and volume from WebSocket
+  useEffect(() => {
+    const unsubs: (() => void)[] = [];
+
+    unsubs.push(
+      on("race-status", (data: unknown) => {
+        const d = data as { raceId?: string; status?: string; totalVolume?: number };
+        if (!d?.raceId) return;
+        queryClient.setQueryData<Race[]>(["races"], (old) => {
+          if (!old) return old;
+          return old.map((race) => {
+            if (race.id !== d.raceId) return race;
+            return {
+              ...race,
+              status: (d.status as Race["status"]) || race.status,
+              totalVolume: d.totalVolume ?? race.totalVolume,
+            };
+          });
+        });
+      })
+    );
+
+    unsubs.push(
+      on("odds-update", (data: unknown) => {
+        const d = data as { marketId?: string; totalVolume?: number };
+        if (!d?.marketId || d.totalVolume == null) return;
+        queryClient.setQueryData<Race[]>(["races"], (old) => {
+          if (!old) return old;
+          return old.map((race) => {
+            if (race.id !== d.marketId) return race;
+            return { ...race, totalVolume: d.totalVolume! };
+          });
+        });
+      })
+    );
+
+    return () => unsubs.forEach((fn) => fn());
+  }, [on, queryClient]);
 
   const filteredRaces = useMemo(() => {
     if (!races) return [];

@@ -1,10 +1,12 @@
 "use client";
 
+import { useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Bell, AlertCircle } from "lucide-react";
 import { cn, timeAgo } from "@/lib/utils/helpers";
+import { useWebSocket } from "@/lib/websocket/client";
 import Link from "next/link";
 
 interface Alert {
@@ -22,6 +24,7 @@ interface AlertsResponse {
 
 export default function AlertsFeed() {
   const queryClient = useQueryClient();
+  const { on } = useWebSocket();
 
   const { data, isLoading, error } = useQuery<AlertsResponse>({
     queryKey: ["alerts-history"],
@@ -32,6 +35,38 @@ export default function AlertsFeed() {
     },
     refetchInterval: 30000,
   });
+
+  // Real-time: prepend new alerts from WebSocket
+  useEffect(() => {
+    const unsubs: (() => void)[] = [];
+
+    const addAlert = (type: Alert["type"], data: unknown) => {
+      const d = data as Record<string, unknown>;
+      const newAlert: Alert = {
+        id: `ws-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        message: String(d?.message || d?.runnerName || "New alert"),
+        timestamp: new Date().toISOString(),
+        isRead: false,
+        type,
+      };
+      queryClient.setQueryData<AlertsResponse>(["alerts-history"], (old) => {
+        if (!old) return { alerts: [newAlert], unreadCount: 1 };
+        return {
+          alerts: [newAlert, ...old.alerts].slice(0, 50),
+          unreadCount: old.unreadCount + 1,
+        };
+      });
+    };
+
+    unsubs.push(on("whale-alert", (data: unknown) => addAlert("whale", data)));
+    unsubs.push(on("fluctuation-alert", (data: unknown) => {
+      const d = data as { classification?: string };
+      const type = d?.classification === "steamer" || d?.classification === "STEAMER" ? "steamer" : "drifter";
+      addAlert(type, data);
+    }));
+
+    return () => unsubs.forEach((fn) => fn());
+  }, [on, queryClient]);
 
   const markAsReadMutation = useMutation({
     mutationFn: async (alertId: string) => {

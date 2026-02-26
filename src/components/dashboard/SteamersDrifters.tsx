@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useState, useEffect } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { TrendingDown, TrendingUp } from "lucide-react";
 import { cn, formatCurrency, formatOdds, formatPercentage, getOddsChangeColor } from "@/lib/utils/helpers";
+import { useWebSocket } from "@/lib/websocket/client";
 
 interface Runner {
   id: string;
@@ -27,6 +28,8 @@ type Tab = "steamers" | "drifters";
 
 export default function SteamersDrifters() {
   const [activeTab, setActiveTab] = useState<Tab>("steamers");
+  const queryClient = useQueryClient();
+  const { on } = useWebSocket();
 
   const { data, isLoading, error } = useQuery<SteamersDriftersResponse>({
     queryKey: ["steamers-drifters"],
@@ -37,6 +40,38 @@ export default function SteamersDrifters() {
     },
     refetchInterval: 30000,
   });
+
+  // Real-time: add new steamers/drifters from WebSocket
+  useEffect(() => {
+    const unsub = on("fluctuation-alert", (data: unknown) => {
+      const d = data as Record<string, unknown>;
+      const isSteamer = d?.classification === "steamer" || d?.classification === "STEAMER";
+      const newRunner: Runner = {
+        id: `ws-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        runnerName: String(d?.runnerName || "Unknown"),
+        venue: String(d?.venue || ""),
+        raceName: String(d?.raceName || ""),
+        oldOdds: Number(d?.oldOdds || d?.oddsBefore || 0),
+        newOdds: Number(d?.newOdds || d?.oddsAfter || 0),
+        percentageChange: Number(d?.percentChange || d?.percentageChange || 0),
+        volumeMatched: Number(d?.volumeDelta || d?.volumeMatched || 0),
+      };
+      queryClient.setQueryData<SteamersDriftersResponse>(["steamers-drifters"], (old) => {
+        if (!old) return { steamers: isSteamer ? [newRunner] : [], drifters: isSteamer ? [] : [newRunner] };
+        const key = isSteamer ? "steamers" : "drifters";
+        const list = [...old[key]];
+        const existing = list.findIndex((r) => r.runnerName === newRunner.runnerName && r.venue === newRunner.venue);
+        if (existing >= 0) {
+          list[existing] = newRunner;
+        } else {
+          list.unshift(newRunner);
+        }
+        return { ...old, [key]: list.slice(0, 20) };
+      });
+    });
+
+    return () => unsub();
+  }, [on, queryClient]);
 
   const runners = activeTab === "steamers" ? data?.steamers : data?.drifters;
   const sortedRunners = runners

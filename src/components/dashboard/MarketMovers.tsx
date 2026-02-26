@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useState, useEffect } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { TrendingUp, TrendingDown, ArrowUpDown } from "lucide-react";
 import { cn, formatCurrency, formatOdds, formatPercentage, getOddsChangeColor } from "@/lib/utils/helpers";
+import { useWebSocket } from "@/lib/websocket/client";
 import Link from "next/link";
 
 interface MarketMover {
@@ -29,6 +30,8 @@ type SortBy = "change" | "volume";
 
 export default function MarketMovers() {
   const [sortBy, setSortBy] = useState<SortBy>("change");
+  const queryClient = useQueryClient();
+  const { on } = useWebSocket();
 
   const { data, isLoading, error } = useQuery<MarketMoversResponse>({
     queryKey: ["market-movers"],
@@ -39,6 +42,38 @@ export default function MarketMovers() {
     },
     refetchInterval: 30000,
   });
+
+  // Real-time: add new market movers from WebSocket
+  useEffect(() => {
+    const unsub = on("fluctuation-alert", (data: unknown) => {
+      const d = data as Record<string, unknown>;
+      const newMover: MarketMover = {
+        id: `ws-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        runnerName: String(d?.runnerName || "Unknown"),
+        venue: String(d?.venue || ""),
+        raceName: String(d?.raceName || ""),
+        oddsBefore: Number(d?.oldOdds || d?.oddsBefore || 0),
+        oddsAfter: Number(d?.newOdds || d?.oddsAfter || 0),
+        percentageChange: Number(d?.percentChange || d?.percentageChange || 0),
+        volumeMatched: Number(d?.volumeDelta || d?.volumeMatched || 0),
+        type: (d?.classification === "steamer" || d?.classification === "STEAMER") ? "STEAMER" : "DRIFTER",
+      };
+      queryClient.setQueryData<MarketMoversResponse>(["market-movers"], (old) => {
+        if (!old) return { movers: [newMover] };
+        // Replace if same runner exists, otherwise prepend
+        const existing = old.movers.findIndex((m) => m.runnerName === newMover.runnerName && m.venue === newMover.venue);
+        const updated = [...old.movers];
+        if (existing >= 0) {
+          updated[existing] = newMover;
+        } else {
+          updated.unshift(newMover);
+        }
+        return { movers: updated.slice(0, 20) };
+      });
+    });
+
+    return () => unsub();
+  }, [on, queryClient]);
 
   const sortedMovers = data?.movers
     ? [...data.movers].sort((a, b) => {

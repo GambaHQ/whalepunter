@@ -14,6 +14,46 @@ const MAX_LOGIN_RETRIES = 10;
 
 let isRunning = false;
 
+// Markets currently subscribed to the stream (skip odds polling for these)
+let streamedMarketIds = new Set<string>();
+
+/**
+ * Set the betfairMarketIds that are being handled by the stream client.
+ * The poller will skip odds fetching for these markets.
+ */
+export function setStreamedMarkets(betfairMarketIds: string[]): void {
+  streamedMarketIds = new Set(betfairMarketIds);
+}
+
+/**
+ * Get all active betfairMarketIds and their internal market IDs.
+ * Used by the stream processor to subscribe to markets.
+ */
+export async function getActiveMarketIds(): Promise<
+  Array<{ internalId: string; betfairMarketId: string }>
+> {
+  const markets = await prisma.market.findMany({
+    where: {
+      status: { in: ["OPEN", "ACTIVE"] },
+      race: {
+        status: { in: ["UPCOMING", "LIVE"] },
+        startTime: {
+          // Only markets for races within the next 2 hours
+          lte: new Date(Date.now() + 2 * 60 * 60 * 1000),
+        },
+      },
+    },
+    select: {
+      id: true,
+      betfairMarketId: true,
+    },
+  });
+  return markets.map((m) => ({
+    internalId: m.id,
+    betfairMarketId: m.betfairMarketId,
+  }));
+}
+
 export async function startBetfairPoller() {
   if (isRunning) {
     console.log("[Poller] Already running, skipping...");
@@ -84,15 +124,22 @@ async function pollLoop(client: ReturnType<typeof getBetfairClient>) {
       await processRaces(horseRaces, "HORSE");
       await processRaces(dogRaces, "DOG");
 
-      // Fetch odds for all active markets
+      // Fetch odds for active markets NOT handled by the stream
       const allMarketIds = [
         ...horseRaces.map((r) => r.marketId),
         ...dogRaces.map((r) => r.marketId),
-      ];
+      ].filter((id) => !streamedMarketIds.has(id));
 
       if (allMarketIds.length > 0) {
+        console.log(
+          `[Poller] Fetching odds for ${allMarketIds.length} markets (${streamedMarketIds.size} handled by stream)`
+        );
         const marketBooks = await client.getMarketOdds(allMarketIds);
         await processOdds(marketBooks);
+      } else if (streamedMarketIds.size > 0) {
+        console.log(
+          `[Poller] All ${streamedMarketIds.size} markets handled by stream, skipping odds poll`
+        );
       }
 
       // Check for settled races and fetch results

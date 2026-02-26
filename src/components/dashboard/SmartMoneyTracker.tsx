@@ -1,9 +1,11 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useEffect } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { TrendingUp } from "lucide-react";
 import { cn, formatCurrency, formatOdds, timeAgo } from "@/lib/utils/helpers";
+import { useWebSocket } from "@/lib/websocket/client";
 
 interface WhaleBet {
   id: string;
@@ -22,6 +24,9 @@ interface SmartMoneyResponse {
 }
 
 export default function SmartMoneyTracker() {
+  const queryClient = useQueryClient();
+  const { on } = useWebSocket();
+
   const { data, isLoading, error } = useQuery<SmartMoneyResponse>({
     queryKey: ["smart-money"],
     queryFn: async () => {
@@ -31,6 +36,30 @@ export default function SmartMoneyTracker() {
     },
     refetchInterval: 30000,
   });
+
+  // Real-time: prepend new whale bets from WebSocket
+  useEffect(() => {
+    const unsub = on("whale-alert", (data: unknown) => {
+      const d = data as Record<string, unknown>;
+      const newBet: WhaleBet = {
+        id: `ws-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        runnerName: String(d?.runnerName || "Unknown"),
+        amount: Number(d?.amount || d?.betAmount || 0),
+        odds: Number(d?.odds || d?.betOdds || 0),
+        raceName: String(d?.raceName || ""),
+        venue: String(d?.venue || ""),
+        timestamp: new Date().toISOString(),
+        runnerVolume: Number(d?.runnerVolume || 0),
+        totalRaceVolume: Number(d?.totalRaceVolume || 0),
+      };
+      queryClient.setQueryData<SmartMoneyResponse>(["smart-money"], (old) => {
+        if (!old) return { whaleBets: [newBet] };
+        return { whaleBets: [newBet, ...old.whaleBets].slice(0, 50) };
+      });
+    });
+
+    return () => unsub();
+  }, [on, queryClient]);
 
   const isRecent = (timestamp: string) => {
     const diff = Date.now() - new Date(timestamp).getTime();

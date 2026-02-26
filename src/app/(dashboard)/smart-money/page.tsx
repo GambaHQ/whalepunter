@@ -1,10 +1,12 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useEffect } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { DollarSign, AlertTriangle, TrendingUp, Clock, MapPin, Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatDistanceToNow } from "date-fns";
+import { useWebSocket } from "@/lib/websocket/client";
 
 interface WhaleAlert {
   id: string;
@@ -27,8 +29,11 @@ interface WhaleAlert {
 }
 
 export default function SmartMoneyPage() {
+  const queryClient = useQueryClient();
+  const { isConnected, on } = useWebSocket();
+
   const { data: whaleAlerts, isLoading, error } = useQuery<WhaleAlert[]>({
-    queryKey: ["smart-money"],
+    queryKey: ["smart-money-page"],
     queryFn: async () => {
       const res = await fetch("/api/dashboard/smart-money");
       if (!res.ok) {
@@ -38,8 +43,35 @@ export default function SmartMoneyPage() {
       }
       return res.json();
     },
-    refetchInterval: 30000, // Refresh every 30 seconds
+    refetchInterval: isConnected ? 60000 : 30000,
   });
+
+  // Real-time: prepend new whale alerts from WebSocket
+  useEffect(() => {
+    const unsub = on("whale-alert", (data: unknown) => {
+      const d = data as Record<string, unknown>;
+      const newAlert: WhaleAlert = {
+        id: `ws-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        runnerName: String(d?.runnerName || "Unknown"),
+        runnerType: String(d?.runnerType || "HORSE"),
+        raceName: String(d?.raceName || ""),
+        raceNumber: Number(d?.raceNumber || 0),
+        venue: String(d?.venue || ""),
+        startTime: String(d?.startTime || new Date().toISOString()),
+        betAmount: Number(d?.amount || d?.betAmount || 0),
+        betOdds: Number(d?.odds || d?.betOdds || 0),
+        betType: String(d?.betType || "BACK"),
+        timestamp: new Date().toISOString(),
+        otherRunners: [],
+      };
+      queryClient.setQueryData<WhaleAlert[]>(["smart-money-page"], (old) => {
+        if (!old) return [newAlert];
+        return [newAlert, ...old].slice(0, 50);
+      });
+    });
+
+    return () => unsub();
+  }, [on, queryClient]);
 
   return (
     <div className="space-y-6">

@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useState, useEffect } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn, formatCurrency, formatOdds } from "@/lib/utils/helpers";
+import { useWebSocket } from "@/lib/websocket/client";
 
 interface RaceRunner {
   id: string;
@@ -35,6 +36,9 @@ export default function RaceHeatmap() {
     y: number;
   } | null>(null);
 
+  const queryClient = useQueryClient();
+  const { on, subscribeToRace, unsubscribeFromRace } = useWebSocket();
+
   const { data, isLoading, error } = useQuery<RaceHeatmapResponse>({
     queryKey: ["race-heatmap"],
     queryFn: async () => {
@@ -44,6 +48,47 @@ export default function RaceHeatmap() {
     },
     refetchInterval: 30000,
   });
+
+  // Subscribe to odds-update for all visible races
+  useEffect(() => {
+    if (!data?.races) return;
+    const raceIds = data.races.map((r) => r.id);
+    raceIds.forEach((id) => subscribeToRace(id));
+    return () => {
+      raceIds.forEach((id) => unsubscribeFromRace(id));
+    };
+  }, [data?.races, subscribeToRace, unsubscribeFromRace]);
+
+  // Real-time: update runner volumes from odds-update events
+  useEffect(() => {
+    const unsub = on("odds-update", (eventData: unknown) => {
+      const d = eventData as { marketId?: string; runners?: Array<{ selectionId?: number; name?: string; totalMatched?: number; backPrice?: number }>; totalVolume?: number };
+      if (!d?.marketId || !d?.runners) return;
+      queryClient.setQueryData<RaceHeatmapResponse>(["race-heatmap"], (old) => {
+        if (!old) return old;
+        const races = old.races.map((race) => {
+          if (race.id !== d.marketId) return race;
+          const updatedRunners = race.runners.map((runner) => {
+            const update = d.runners!.find(
+              (r) => r.name === runner.runnerName || String(r.selectionId) === runner.id
+            );
+            if (!update) return runner;
+            return {
+              ...runner,
+              odds: update.backPrice ?? runner.odds,
+              volume: update.totalMatched ?? runner.volume,
+            };
+          });
+          const newMax = Math.max(...updatedRunners.map((r) => r.volume), 0);
+          return { ...race, runners: updatedRunners, maxVolume: newMax };
+        });
+        const globalMax = Math.max(...races.map((r) => r.maxVolume), 0);
+        return { races, globalMaxVolume: globalMax };
+      });
+    });
+
+    return () => unsub();
+  }, [on, queryClient]);
 
   const getColorIntensity = (volume: number, maxVolume: number) => {
     const intensity = Math.min((volume / maxVolume) * 100, 100);

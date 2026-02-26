@@ -1,10 +1,12 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useEffect } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { TrendingUp, TrendingDown, DollarSign, Zap, Activity } from "lucide-react";
+import { TrendingUp, TrendingDown, DollarSign, Zap, Activity, Wifi, WifiOff } from "lucide-react";
 import { cn, formatCurrency } from "@/lib/utils/helpers";
+import { useWebSocket } from "@/lib/websocket/client";
 import MarketMovers from "@/components/dashboard/MarketMovers";
 import SmartMoneyTracker from "@/components/dashboard/SmartMoneyTracker";
 import SteamersDrifters from "@/components/dashboard/SteamersDrifters";
@@ -54,19 +56,71 @@ function StatCard({
 }
 
 export default function DashboardPage() {
+  const queryClient = useQueryClient();
+  const { isConnected, on } = useWebSocket();
+
   const { data: stats } = useQuery<DashboardStats>({
     queryKey: ["dashboard-stats"],
     queryFn: async () => {
-      // Placeholder data - replace with actual API call
+      const res = await fetch("/api/dashboard/stats");
+      if (res.ok) return res.json();
       return {
-        liveRacesCount: 12,
-        whaleAlertsToday: 8,
-        steamersCount: 24,
-        driftersCount: 18,
+        liveRacesCount: 0,
+        whaleAlertsToday: 0,
+        steamersCount: 0,
+        driftersCount: 0,
       };
     },
-    refetchInterval: 30000,
+    refetchInterval: isConnected ? 60000 : 30000,
   });
+
+  // Real-time WebSocket updates for dashboard stats
+  useEffect(() => {
+    const unsubs: (() => void)[] = [];
+
+    unsubs.push(
+      on("whale-alert", () => {
+        queryClient.setQueryData<DashboardStats>(["dashboard-stats"], (old) => {
+          if (!old) return old;
+          return { ...old, whaleAlertsToday: old.whaleAlertsToday + 1 };
+        });
+      })
+    );
+
+    unsubs.push(
+      on("fluctuation-alert", (data: unknown) => {
+        const d = data as { classification?: string };
+        queryClient.setQueryData<DashboardStats>(["dashboard-stats"], (old) => {
+          if (!old) return old;
+          if (d?.classification === "steamer" || d?.classification === "STEAMER") {
+            return { ...old, steamersCount: old.steamersCount + 1 };
+          }
+          if (d?.classification === "drifter" || d?.classification === "DRIFTER") {
+            return { ...old, driftersCount: old.driftersCount + 1 };
+          }
+          return old;
+        });
+      })
+    );
+
+    unsubs.push(
+      on("race-status", (data: unknown) => {
+        const d = data as { status?: string };
+        queryClient.setQueryData<DashboardStats>(["dashboard-stats"], (old) => {
+          if (!old) return old;
+          if (d?.status === "LIVE" || d?.status === "IN_PLAY") {
+            return { ...old, liveRacesCount: old.liveRacesCount + 1 };
+          }
+          if (d?.status === "CLOSED" || d?.status === "RESULTED") {
+            return { ...old, liveRacesCount: Math.max(0, old.liveRacesCount - 1) };
+          }
+          return old;
+        });
+      })
+    );
+
+    return () => unsubs.forEach((fn) => fn());
+  }, [on, queryClient]);
 
   return (
     <div className="container mx-auto p-6 space-y-6">
@@ -75,15 +129,26 @@ export default function DashboardPage() {
         <div className="flex items-center gap-3">
           <h1 className="text-3xl font-bold">Dashboard</h1>
           <div className="flex items-center gap-2">
-            <span className="relative flex h-3 w-3">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
-            </span>
-            <span className="text-sm text-[hsl(var(--muted-foreground))]">Live</span>
+            {isConnected ? (
+              <>
+                <span className="relative flex h-3 w-3">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
+                </span>
+                <span className="text-sm text-[hsl(var(--muted-foreground))]">Live</span>
+              </>
+            ) : (
+              <>
+                <span className="relative flex h-3 w-3">
+                  <span className="relative inline-flex rounded-full h-3 w-3 bg-yellow-500"></span>
+                </span>
+                <span className="text-sm text-[hsl(var(--muted-foreground))]">Connecting...</span>
+              </>
+            )}
           </div>
         </div>
         <div className="text-sm text-[hsl(var(--muted-foreground))]">
-          Auto-refresh every 30s
+          {isConnected ? "Real-time updates" : "Auto-refresh every 30s"}
         </div>
       </div>
 

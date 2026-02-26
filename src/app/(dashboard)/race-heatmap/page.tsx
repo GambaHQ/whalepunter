@@ -1,10 +1,12 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useEffect } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { BarChart3, Loader2, Clock, MapPin } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils/helpers";
+import { useWebSocket } from "@/lib/websocket/client";
 import Link from "next/link";
 
 interface HeatmapRunner {
@@ -57,11 +59,66 @@ function formatTime(isoString: string): string {
 }
 
 export default function RaceHeatmapPage() {
+  const queryClient = useQueryClient();
+  const { isConnected, on, subscribeToRace, unsubscribeFromRace } = useWebSocket();
+
   const { data: races, isLoading, error } = useQuery({
-    queryKey: ["race-heatmap"],
+    queryKey: ["race-heatmap-page"],
     queryFn: fetchHeatmapData,
-    refetchInterval: 30000, // Refresh every 30 seconds
+    refetchInterval: isConnected ? 60000 : 30000,
   });
+
+  // Subscribe to odds-update for all visible races
+  useEffect(() => {
+    if (!races) return;
+    const raceIds = races.map((r) => r.raceId);
+    raceIds.forEach((id) => subscribeToRace(id));
+    return () => {
+      raceIds.forEach((id) => unsubscribeFromRace(id));
+    };
+  }, [races, subscribeToRace, unsubscribeFromRace]);
+
+  // Real-time: update runner odds and volumes from WebSocket
+  useEffect(() => {
+    const unsub = on("odds-update", (eventData: unknown) => {
+      const d = eventData as {
+        marketId?: string;
+        runners?: Array<{
+          selectionId?: number;
+          name?: string;
+          totalMatched?: number;
+          backPrice?: number;
+          layPrice?: number;
+        }>;
+        totalVolume?: number;
+      };
+      if (!d?.marketId || !d?.runners) return;
+      queryClient.setQueryData<HeatmapRace[]>(["race-heatmap-page"], (old) => {
+        if (!old) return old;
+        return old.map((race) => {
+          if (race.raceId !== d.marketId) return race;
+          const totalVol = d.totalVolume ?? race.totalVolume;
+          const updatedRunners = race.runners.map((runner) => {
+            const update = d.runners!.find(
+              (r) => r.name === runner.runnerName || String(r.selectionId) === runner.runnerId
+            );
+            if (!update) return runner;
+            const vol = update.totalMatched ?? runner.volumeMatched;
+            return {
+              ...runner,
+              backOdds: update.backPrice ?? runner.backOdds,
+              layOdds: update.layPrice ?? runner.layOdds,
+              volumeMatched: vol,
+              volumePercentage: totalVol > 0 ? (vol / totalVol) * 100 : 0,
+            };
+          });
+          return { ...race, runners: updatedRunners, totalVolume: totalVol };
+        });
+      });
+    });
+
+    return () => unsub();
+  }, [on, queryClient]);
 
   return (
     <div className="space-y-6">
