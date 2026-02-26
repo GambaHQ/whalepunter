@@ -62,8 +62,47 @@ export async function GET(
       return NextResponse.json({ error: "Runner not found" }, { status: 404 });
     }
 
-    // Calculate overall stats from race entries
-    const completedRaces = runner.entries.filter(
+    // If this is a Betfair-created runner with no results, find historical counterpart
+    let historicalEntries: typeof runner.entries = [];
+    let historicalStats: typeof runner.stats = [];
+    if (runnerId.startsWith("runner-")) {
+      const cleanName = runner.name.replace(/^\d+\.\s*/, "");
+      const historical = await prisma.runner.findFirst({
+        where: {
+          id: { not: { startsWith: "runner-" } },
+          name: { equals: cleanName, mode: "insensitive" },
+          type: runner.type,
+        },
+        include: {
+          entries: {
+            include: {
+              race: {
+                include: {
+                  meeting: { select: { venue: true, date: true } },
+                  market: { select: { id: true } },
+                },
+              },
+              jockey: { select: { id: true, name: true } },
+              trainer: { select: { id: true, name: true } },
+              handler: { select: { id: true, name: true } },
+            },
+            orderBy: { createdAt: "desc" },
+          },
+          stats: true,
+        },
+      });
+      if (historical) {
+        historicalEntries = historical.entries;
+        historicalStats = historical.stats;
+      }
+    }
+
+    // Merge entries: use Betfair entries + historical entries
+    const allEntries = [...runner.entries, ...historicalEntries];
+    const allStats = runner.stats.length > 0 ? runner.stats : historicalStats;
+
+    // Calculate overall stats from all race entries
+    const completedRaces = allEntries.filter(
       (entry) => entry.finishPosition !== null
     );
     const totalRaces = completedRaces.length;
@@ -101,7 +140,7 @@ export async function GET(
 
     // Format race history
     const raceHistory = await Promise.all(
-      runner.entries.map(async (entry) => {
+      allEntries.map(async (entry) => {
         // Get odds for this race
         let odds = null;
         if (entry.race.market) {
@@ -140,18 +179,18 @@ export async function GET(
     );
 
     // Group stats by type
-    const statsByCondition = runner.stats.filter(
+    const statsByCondition = allStats.filter(
       (stat) => stat.statType === "condition"
     );
-    const statsByDistance = runner.stats.filter(
+    const statsByDistance = allStats.filter(
       (stat) => stat.statType === "distance"
     );
-    const statsByBox = runner.stats.filter((stat) => stat.statType === "box");
+    const statsByBox = allStats.filter((stat) => stat.statType === "box");
 
     // Build response
     const runnerProfile = {
       id: runner.id,
-      name: runner.name,
+      name: runner.name.replace(/^\d+\.\s*/, ""), // Strip barrier prefix from name
       type: runner.type,
       dateOfBirth: runner.dateOfBirth?.toISOString() || null,
       sire: runner.sire,

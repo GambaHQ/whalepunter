@@ -226,24 +226,43 @@ async function processRaces(
 
       // Process runners
       for (const runner of catalogue.runners || []) {
-        // Try to find existing runner by name and type first (to link with historical data)
+        // Strip barrier/tab number prefix from Betfair names (e.g. "5. Nordic Delight" -> "Nordic Delight")
+        const cleanName = runner.runnerName.replace(/^\d+\.\s*/, '');
+
+        // Try to find existing runner by cleaned name and type first (to link with historical data)
         let existingRunner = await prisma.runner.findFirst({
           where: {
-            name: { equals: runner.runnerName, mode: "insensitive" },
+            name: { equals: cleanName, mode: "insensitive" },
             type,
+            id: { not: { startsWith: "runner-" } }, // Prefer historical runners
           },
           select: { id: true },
         });
+
+        // If no historical match, also check with the original Betfair name
+        if (!existingRunner && cleanName !== runner.runnerName) {
+          existingRunner = await prisma.runner.findFirst({
+            where: {
+              name: { equals: runner.runnerName, mode: "insensitive" },
+              type,
+              id: { not: { startsWith: "runner-" } },
+            },
+            select: { id: true },
+          });
+        }
 
         // If no match found, use selection ID as fallback
         const runnerId = existingRunner?.id || `runner-${runner.selectionId}`;
 
         await prisma.runner.upsert({
           where: { id: runnerId },
-          update: { name: runner.runnerName },
+          update: {
+            // Don't overwrite historical name with Betfair prefixed name
+            ...(existingRunner ? {} : { name: cleanName }),
+          },
           create: {
             id: runnerId,
-            name: runner.runnerName,
+            name: cleanName,
             type,
           },
         });
