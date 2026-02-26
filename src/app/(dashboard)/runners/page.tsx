@@ -42,8 +42,10 @@ async function searchRunners(
   return res.json();
 }
 
-async function fetchPopularRunners(): Promise<RunnerSearchResult[]> {
-  const res = await fetch("/api/runners/popular");
+async function fetchPopularRunners(type?: "HORSE" | "DOG"): Promise<RunnerSearchResult[]> {
+  const params = new URLSearchParams();
+  if (type) params.append("type", type);
+  const res = await fetch(`/api/runners/popular?${params.toString()}`);
   if (!res.ok) return [];
   return res.json();
 }
@@ -67,7 +69,7 @@ export default function RunnersPage() {
             searchQuery,
             selectedType !== "ALL" ? selectedType : undefined
           )
-        : fetchPopularRunners(),
+        : fetchPopularRunners(selectedType !== "ALL" ? selectedType : undefined),
     enabled: true,
   });
 

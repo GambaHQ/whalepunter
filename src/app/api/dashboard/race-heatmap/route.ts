@@ -95,18 +95,40 @@ export async function GET(req: Request) {
           })
         );
 
-        // Calculate total volume for the race
-        const totalVolume = runnersWithOdds.reduce(
-          (sum, runner) => sum + runner.volumeMatched,
+        // Use market-level totalMatched as the total volume
+        const marketTotalMatched = race.market.totalMatched || 0;
+
+        // Calculate implied probability from odds to estimate volume distribution
+        // Shorter odds (favorites) typically attract more money
+        const runnersWithImpliedProb = runnersWithOdds.map((runner) => {
+          const impliedProb = runner.backOdds && runner.backOdds > 0 
+            ? 1 / runner.backOdds 
+            : 0;
+          return { ...runner, impliedProb };
+        });
+
+        const totalImpliedProb = runnersWithImpliedProb.reduce(
+          (sum, r) => sum + r.impliedProb,
           0
         );
 
-        // Calculate volume percentage for each runner
-        const runnersWithPercentage = runnersWithOdds.map((runner) => ({
-          ...runner,
-          volumePercentage:
-            totalVolume > 0 ? (runner.volumeMatched / totalVolume) * 100 : 0,
-        }));
+        // Estimate volume per runner based on implied probability share of market total
+        const runnersWithPercentage = runnersWithImpliedProb.map((runner) => {
+          const volumeShare = totalImpliedProb > 0 
+            ? runner.impliedProb / totalImpliedProb 
+            : 0;
+          const estimatedVolume = marketTotalMatched * volumeShare;
+          return {
+            runnerId: runner.runnerId,
+            runnerName: runner.runnerName,
+            barrierBox: runner.barrierBox,
+            backOdds: runner.backOdds,
+            layOdds: runner.layOdds,
+            // Use actual volume if available, otherwise use estimated
+            volumeMatched: runner.volumeMatched > 0 ? runner.volumeMatched : estimatedVolume,
+            volumePercentage: volumeShare * 100,
+          };
+        });
 
         return {
           raceId: race.id,
@@ -116,8 +138,8 @@ export async function GET(req: Request) {
           raceType: race.meeting.type,
           startTime: race.startTime.toISOString(),
           status: race.status,
-          totalMatched: race.market.totalMatched,
-          totalVolume,
+          totalMatched: marketTotalMatched,
+          totalVolume: marketTotalMatched,
           runners: runnersWithPercentage,
         };
       })

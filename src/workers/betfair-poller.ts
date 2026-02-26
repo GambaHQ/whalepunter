@@ -229,7 +229,17 @@ async function processRaces(
 
       // Process runners
       for (const runner of catalogue.runners || []) {
-        const runnerId = `runner-${runner.selectionId}`;
+        // Try to find existing runner by name and type first (to link with historical data)
+        let existingRunner = await prisma.runner.findFirst({
+          where: {
+            name: { equals: runner.runnerName, mode: "insensitive" },
+            type,
+          },
+          select: { id: true },
+        });
+
+        // If no match found, use selection ID as fallback
+        const runnerId = existingRunner?.id || `runner-${runner.selectionId}`;
 
         await prisma.runner.upsert({
           where: { id: runnerId },
@@ -271,6 +281,7 @@ async function processOdds(marketBooks: MarketBook[]) {
     try {
       const market = await prisma.market.findUnique({
         where: { betfairMarketId: book.marketId },
+        include: { race: true },
       });
 
       if (!market) continue;
@@ -285,9 +296,21 @@ async function processOdds(marketBooks: MarketBook[]) {
         },
       });
 
+      // Get race entries to map selectionId -> runnerId
+      const raceEntries = await prisma.raceEntry.findMany({
+        where: { raceId: market.raceId },
+        select: { runnerId: true, betfairSelectionId: true },
+      });
+      const selectionToRunnerId = new Map(
+        raceEntries
+          .filter((e) => e.betfairSelectionId)
+          .map((e) => [e.betfairSelectionId!, e.runnerId])
+      );
+
       // Store odds snapshots for each runner
       for (const runner of book.runners) {
-        const runnerId = `runner-${runner.selectionId}`;
+        // Use mapped runnerId from race entry, fallback to runner-{selectionId}
+        const runnerId = selectionToRunnerId.get(runner.selectionId) || `runner-${runner.selectionId}`;
         const backOdds = getBestBack(runner);
         const layOdds = getBestLay(runner);
         
@@ -395,8 +418,6 @@ async function fetchAndProcessResults(client: ReturnType<typeof getBetfairClient
         // Process runner results
         let hasResults = false;
         for (const runner of book.runners) {
-          const runnerId = `runner-${runner.selectionId}`;
-          
           // Determine finish position from status
           let finishPosition: number | null = null;
           let resultText: string | null = null;
@@ -419,10 +440,11 @@ async function fetchAndProcessResults(client: ReturnType<typeof getBetfairClient
           }
 
           if (finishPosition !== null) {
+            // Update by betfairSelectionId since runnerId might be historical CUID
             await prisma.raceEntry.updateMany({
               where: {
                 raceId: race.id,
-                runnerId,
+                betfairSelectionId: runner.selectionId,
               },
               data: {
                 finishPosition,

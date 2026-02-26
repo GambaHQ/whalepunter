@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -12,6 +12,14 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { cn, formatOdds } from "@/lib/utils/helpers";
 import {
   ArrowLeft,
@@ -20,6 +28,7 @@ import {
   TrendingUp,
   X,
   Plus,
+  Search,
 } from "lucide-react";
 
 interface CompareRunner {
@@ -66,10 +75,32 @@ async function fetchCompareRunners(ids: string[]): Promise<CompareResponse> {
   return res.json();
 }
 
+interface SearchResult {
+  id: string;
+  name: string;
+  type: "HORSE" | "DOG";
+  stats: {
+    totalRaces: number;
+    wins: number;
+    winRate: number;
+  };
+}
+
+async function searchRunners(query: string): Promise<SearchResult[]> {
+  if (!query || query.length < 2) return [];
+  const res = await fetch(`/api/runners/search?q=${encodeURIComponent(query)}`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
 export default function RunnerComparePage() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const [runnerIds, setRunnerIds] = useState<string[]>([]);
+  const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
 
   useEffect(() => {
     const idsParam = searchParams.get("ids");
@@ -77,6 +108,31 @@ export default function RunnerComparePage() {
       setRunnerIds(idsParam.split(",").filter(Boolean));
     }
   }, [searchParams]);
+
+  const handleSearch = useCallback(async (query: string) => {
+    setSearchQuery(query);
+    if (query.length < 2) {
+      setSearchResults([]);
+      return;
+    }
+    setIsSearching(true);
+    try {
+      const results = await searchRunners(query);
+      setSearchResults(results);
+    } finally {
+      setIsSearching(false);
+    }
+  }, []);
+
+  const handleAddRunner = (runnerId: string) => {
+    if (runnerIds.includes(runnerId)) return;
+    const newIds = [...runnerIds, runnerId];
+    setRunnerIds(newIds);
+    router.push(`/runners/compare?ids=${newIds.join(",")}`);
+    setIsAddDialogOpen(false);
+    setSearchQuery("");
+    setSearchResults([]);
+  };
 
   const {
     data: compareData,
@@ -155,10 +211,72 @@ export default function RunnerComparePage() {
             {runners.length !== 1 ? "s" : ""}
           </p>
         </div>
-        <Button variant="outline" size="sm">
-          <Plus className="mr-2 h-4 w-4" />
-          Add Runner
-        </Button>
+        <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
+          <DialogTrigger asChild>
+            <Button variant="outline" size="sm">
+              <Plus className="mr-2 h-4 w-4" />
+              Add Runner
+            </Button>
+          </DialogTrigger>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Add Runner to Compare</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  type="text"
+                  placeholder="Search runners..."
+                  value={searchQuery}
+                  onChange={(e) => handleSearch(e.target.value)}
+                  className="pl-10"
+                />
+              </div>
+              {isSearching ? (
+                <div className="flex justify-center py-4">
+                  <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                </div>
+              ) : searchResults.length > 0 ? (
+                <div className="max-h-64 overflow-y-auto space-y-2">
+                  {searchResults.map((result) => (
+                    <div
+                      key={result.id}
+                      className={cn(
+                        "flex items-center justify-between p-3 rounded-lg border cursor-pointer hover:bg-muted/50",
+                        runnerIds.includes(result.id) && "opacity-50 cursor-not-allowed"
+                      )}
+                      onClick={() => !runnerIds.includes(result.id) && handleAddRunner(result.id)}
+                    >
+                      <div>
+                        <div className="font-medium">{result.name}</div>
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <Badge variant={result.type === "HORSE" ? "default" : "secondary"} className="text-xs">
+                            {result.type}
+                          </Badge>
+                          <span>{result.stats.winRate.toFixed(1)}% WR</span>
+                        </div>
+                      </div>
+                      {runnerIds.includes(result.id) ? (
+                        <span className="text-xs text-muted-foreground">Already added</span>
+                      ) : (
+                        <Plus className="h-4 w-4 text-primary" />
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : searchQuery.length >= 2 ? (
+                <p className="text-center text-sm text-muted-foreground py-4">
+                  No runners found
+                </p>
+              ) : (
+                <p className="text-center text-sm text-muted-foreground py-4">
+                  Type at least 2 characters to search
+                </p>
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
 
       {/* Runner Cards */}

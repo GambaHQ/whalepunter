@@ -2,13 +2,17 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 
 // GET /api/runners/popular - Get popular runners based on recent betting activity
-export async function GET() {
+export async function GET(req: Request) {
   try {
+    const { searchParams } = new URL(req.url);
+    const type = searchParams.get("type") as "HORSE" | "DOG" | null;
+    
     // Get runners with the most odds snapshots in the last 24 hours
     const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
     const popularRunners = await prisma.runner.findMany({
       where: {
+        ...(type ? { type } : {}),
         oddsSnapshots: {
           some: {
             timestamp: { gte: oneDayAgo },
@@ -66,6 +70,9 @@ export async function GET() {
     // If no recent activity, fall back to runners with most entries
     if (formatted.length === 0) {
       const fallbackRunners = await prisma.runner.findMany({
+        where: {
+          ...(type ? { type } : {}),
+        },
         select: {
           id: true,
           name: true,
