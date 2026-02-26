@@ -19,6 +19,8 @@ export interface RunnerData {
   oddsChange: number; // percentage change
   form?: string;
   hasWhaleBet?: boolean;
+  resultStatus?: string | null; // WINNER, LOSER, ACTIVE from Betfair
+  finishPosition?: number | null;
 }
 
 interface LiveOddsTableProps {
@@ -178,7 +180,9 @@ export function LiveOddsTable({ runners, maxVolume }: LiveOddsTableProps) {
                   key={runner.id}
                   className={cn(
                     "border-b border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))]/50 transition-colors",
-                    runner.hasWhaleBet && "border-l-4 border-l-yellow-500"
+                    runner.hasWhaleBet && "border-l-4 border-l-yellow-500",
+                    runner.resultStatus === "WINNER" && "border-l-4 border-l-green-500 bg-green-500/10",
+                    runner.resultStatus === "LOSER" && "opacity-60"
                   )}
                 >
                   <td className="px-4 py-3 text-sm font-medium text-[hsl(var(--foreground))]">
@@ -230,7 +234,13 @@ export function LiveOddsTable({ runners, maxVolume }: LiveOddsTableProps) {
                     </div>
                   </td>
                   <td className="px-4 py-3 text-center text-xs font-mono text-[hsl(var(--muted-foreground))]">
-                    {runner.form || "-"}
+                    {runner.resultStatus === "WINNER" ? (
+                      <span className="text-green-500 font-bold">WON</span>
+                    ) : runner.resultStatus === "LOSER" ? (
+                      <span>{runner.form || "-"}</span>
+                    ) : (
+                      runner.form || "-"
+                    )}
                   </td>
                 </tr>
               );

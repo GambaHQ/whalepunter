@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
+import { getBetfairClient } from "@/lib/betfair/client";
+import type { MarketBook, RunnerBook } from "@/types/betfair";
 
 export async function GET(
   req: Request,
@@ -79,11 +81,49 @@ export async function GET(
       return NextResponse.json({ error: "Race not found" }, { status: 404 });
     }
 
-    // For each runner, get latest odds
+    // --- A) Fetch live Betfair odds as fallback ---
+    let betfairRunnerMap = new Map<number, RunnerBook>();
+    let betfairMarketBook: MarketBook | null = null;
+
+    if (race.market?.betfairMarketId) {
+      // First check if we have any odds snapshots at all
+      const snapshotCount = await prisma.oddsSnapshot.count({
+        where: { marketId: race.market.id },
+      });
+
+      // Fetch live data from Betfair if no snapshots or market might have updated
+      if (snapshotCount === 0) {
+        try {
+          const client = getBetfairClient();
+          if (!client.isAuthenticated()) {
+            const username = process.env.BETFAIR_USERNAME;
+            const password = process.env.BETFAIR_PASSWORD;
+            if (username && password) {
+              await client.login(username, password);
+            }
+          }
+          if (client.isAuthenticated()) {
+            const marketBooks = await client.getMarketOdds([
+              race.market.betfairMarketId,
+            ]);
+            if (marketBooks.length > 0) {
+              betfairMarketBook = marketBooks[0];
+              for (const runner of betfairMarketBook.runners) {
+                betfairRunnerMap.set(runner.selectionId, runner);
+              }
+            }
+          }
+        } catch (error) {
+          console.warn("[Race Detail] Failed to fetch live Betfair odds:", error);
+        }
+      }
+    }
+
+    // --- B) Calculate form for each runner ---
     const runnersWithOdds = await Promise.all(
       race.entries.map(async (entry) => {
+        // Get latest odds from snapshots
         let latestOdds = null;
-
         if (race.market) {
           latestOdds = await prisma.oddsSnapshot.findFirst({
             where: {
@@ -95,6 +135,46 @@ export async function GET(
             },
           });
         }
+
+        // If no snapshot, use live Betfair data
+        let odds = latestOdds
+          ? {
+              backOdds: latestOdds.backOdds,
+              layOdds: latestOdds.layOdds,
+              volumeMatched: latestOdds.volumeMatched,
+              timestamp: latestOdds.timestamp.toISOString(),
+            }
+          : null;
+
+        let resultStatus: string | null = null;
+
+        if (!odds && entry.betfairSelectionId) {
+          const runnerBook = betfairRunnerMap.get(entry.betfairSelectionId);
+          if (runnerBook) {
+            const bestBack = runnerBook.ex?.availableToBack?.[0];
+            const bestLay = runnerBook.ex?.availableToLay?.[0];
+            odds = {
+              backOdds: bestBack?.price ?? runnerBook.lastPriceTraded ?? null,
+              layOdds: bestLay?.price ?? null,
+              volumeMatched: runnerBook.totalMatched ?? 0,
+              timestamp: new Date().toISOString(),
+            };
+            resultStatus = runnerBook.status; // ACTIVE, WINNER, LOSER, etc.
+          }
+        } else if (entry.betfairSelectionId && betfairRunnerMap.size > 0) {
+          // Even if we have snapshot odds, grab result status from Betfair
+          const runnerBook = betfairRunnerMap.get(entry.betfairSelectionId);
+          if (runnerBook) {
+            resultStatus = runnerBook.status;
+          }
+        }
+
+        // Calculate form: last 5 completed races
+        const form = await calculateRunnerForm(
+          entry.runnerId,
+          entry.runner.name,
+          entry.runner.type
+        );
 
         return {
           entryId: entry.id,
@@ -133,18 +213,50 @@ export async function GET(
             : null,
           finishPosition: entry.finishPosition,
           result: entry.result,
+          resultStatus,
           betfairSelectionId: entry.betfairSelectionId,
-          odds: latestOdds
-            ? {
-                backOdds: latestOdds.backOdds,
-                layOdds: latestOdds.layOdds,
-                volumeMatched: latestOdds.volumeMatched,
-                timestamp: latestOdds.timestamp.toISOString(),
-              }
-            : null,
+          odds,
+          form,
         };
       })
     );
+
+    // --- C) Parse distance from race name if null ---
+    let distance = race.distance;
+    if (!distance) {
+      const distMatch = race.name.match(/(\d{3,4})m/i);
+      if (distMatch) {
+        distance = parseInt(distMatch[1], 10);
+      }
+    }
+
+    // --- D) Determine race status from Betfair market ---
+    let raceStatus = race.status;
+    if (betfairMarketBook) {
+      if (betfairMarketBook.status === "CLOSED") {
+        raceStatus = "RESULTED";
+      } else if (betfairMarketBook.inplay) {
+        raceStatus = "LIVE";
+      } else if (betfairMarketBook.status === "OPEN") {
+        raceStatus = "UPCOMING";
+      }
+
+      // Update DB if status changed
+      if (raceStatus !== race.status) {
+        prisma.race
+          .update({
+            where: { id: race.id },
+            data: { status: raceStatus },
+          })
+          .catch((err: unknown) =>
+            console.warn("[Race Detail] Failed to update race status:", err)
+          );
+      }
+    }
+
+    // Use live Betfair totalMatched if available
+    const totalMatched =
+      betfairMarketBook?.totalMatched ?? race.market?.totalMatched ?? 0;
 
     // Build response
     const raceDetail = {
@@ -152,11 +264,11 @@ export async function GET(
       meetingId: race.meetingId,
       raceNumber: race.raceNumber,
       name: race.name,
-      distance: race.distance,
+      distance,
       conditions: race.conditions,
       weather: race.weather,
       startTime: race.startTime.toISOString(),
-      status: race.status,
+      status: raceStatus,
       resultJson: race.resultJson,
       meeting: {
         id: race.meeting.id,
@@ -169,9 +281,9 @@ export async function GET(
         ? {
             id: race.market.id,
             betfairMarketId: race.market.betfairMarketId,
-            totalMatched: race.market.totalMatched,
-            status: race.market.status,
-            inplay: race.market.inplay,
+            totalMatched,
+            status: betfairMarketBook?.status ?? race.market.status,
+            inplay: betfairMarketBook?.inplay ?? race.market.inplay,
           }
         : null,
       runners: runnersWithOdds,
@@ -185,4 +297,71 @@ export async function GET(
       { status: 500 }
     );
   }
+}
+
+/**
+ * Calculate a runner's recent form string from historical race entries.
+ * Returns last 5 finish positions as a string (e.g. "12341"), or undefined if no history.
+ */
+async function calculateRunnerForm(
+  runnerId: string,
+  runnerName: string,
+  runnerType: string
+): Promise<string | undefined> {
+  // Get completed entries for this runner
+  let completedEntries = await prisma.raceEntry.findMany({
+    where: {
+      runnerId,
+      finishPosition: { not: null },
+    },
+    include: {
+      race: { select: { startTime: true } },
+    },
+    orderBy: { race: { startTime: "desc" } },
+    take: 5,
+  });
+
+  // If Betfair runner with no/few results, look up historical counterpart
+  if (completedEntries.length < 2 && runnerId.startsWith("runner-")) {
+    const cleanName = runnerName.replace(/^\d+\.\s*/, "");
+    const historical = await prisma.runner.findFirst({
+      where: {
+        name: { equals: cleanName, mode: "insensitive" },
+        type: runnerType as any,
+        id: { not: { startsWith: "runner-" } },
+      },
+      select: { id: true },
+    });
+
+    if (historical) {
+      const historicalEntries = await prisma.raceEntry.findMany({
+        where: {
+          runnerId: historical.id,
+          finishPosition: { not: null },
+        },
+        include: {
+          race: { select: { startTime: true } },
+        },
+        orderBy: { race: { startTime: "desc" } },
+        take: 5,
+      });
+
+      // Merge and sort by date, take top 5
+      const merged = [...completedEntries, ...historicalEntries]
+        .sort(
+          (a, b) =>
+            new Date(b.race.startTime).getTime() -
+            new Date(a.race.startTime).getTime()
+        )
+        .slice(0, 5);
+
+      completedEntries = merged;
+    }
+  }
+
+  if (completedEntries.length === 0) return undefined;
+
+  return completedEntries
+    .map((e) => e.finishPosition?.toString() || "X")
+    .join("");
 }

@@ -75,8 +75,10 @@ async function fetchRaceDetail(raceId: string): Promise<RaceDetail> {
       volume,
       marketPercentage,
       oddsChange: 0, // Will be updated via WebSocket
-      form: undefined,
+      form: r.form || undefined,
       hasWhaleBet: false,
+      resultStatus: r.resultStatus || null,
+      finishPosition: r.finishPosition || null,
     };
   });
 
