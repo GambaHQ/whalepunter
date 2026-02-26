@@ -20,19 +20,31 @@ export async function GET(req: Request) {
       );
     }
 
-    // Get upcoming races in the next 2 hours
+    // Get upcoming races in the next 2 hours AND recent races from the past 4 hours
+    // Extended lookback window ensures we show dog races even during scheduling gaps
+    // (Australian dog racing typically runs 6PM-11PM AEDT = 7AM-12PM UTC)
     const now = new Date();
+    const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000);
     const twoHoursLater = new Date(Date.now() + 2 * 60 * 60 * 1000);
+
+    // Parse optional type filter from query params
+    const { searchParams } = new URL(req.url);
+    const typeFilter = searchParams.get("type"); // 'HORSE', 'DOG', or null for all
 
     const upcomingRaces = await prisma.race.findMany({
       where: {
         startTime: {
-          gte: now,
+          gte: fourHoursAgo, // Include races from past 4 hours
           lte: twoHoursLater,
         },
         status: {
-          in: ["UPCOMING", "LIVE"],
+          in: ["UPCOMING", "LIVE", "RESULTED"], // Include recently finished races
         },
+        ...(typeFilter && {
+          meeting: {
+            type: typeFilter as "HORSE" | "DOG",
+          },
+        }),
       },
       orderBy: {
         startTime: "asc",
@@ -130,6 +142,9 @@ export async function GET(req: Request) {
           };
         });
 
+        // Determine if race is in the past (recent) vs upcoming
+        const isRecent = race.startTime < now;
+
         return {
           raceId: race.id,
           raceName: race.name,
@@ -138,6 +153,7 @@ export async function GET(req: Request) {
           raceType: race.meeting.type,
           startTime: race.startTime.toISOString(),
           status: race.status,
+          isRecent, // true if race already started/finished
           totalMatched: marketTotalMatched,
           totalVolume: marketTotalMatched,
           runners: runnersWithPercentage,

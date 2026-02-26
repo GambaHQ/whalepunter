@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { BarChart3, Loader2, Clock, MapPin } from "lucide-react";
+import { BarChart3, Loader2, Clock, CheckCircle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils/helpers";
 import { useWebSocket } from "@/lib/websocket/client";
 import Link from "next/link";
@@ -27,13 +28,17 @@ interface HeatmapRace {
   raceType: string;
   startTime: string;
   status: string;
+  isRecent?: boolean;
   totalMatched: number;
   totalVolume: number;
   runners: HeatmapRunner[];
 }
 
-async function fetchHeatmapData(): Promise<HeatmapRace[]> {
-  const res = await fetch("/api/dashboard/race-heatmap");
+type RaceTypeFilter = "ALL" | "HORSE" | "DOG";
+
+async function fetchHeatmapData(typeFilter: RaceTypeFilter): Promise<HeatmapRace[]> {
+  const params = typeFilter !== "ALL" ? `?type=${typeFilter}` : "";
+  const res = await fetch(`/api/dashboard/race-heatmap${params}`);
   if (!res.ok) {
     if (res.status === 401) throw new Error("Please log in to view this page");
     if (res.status === 403) throw new Error("Upgrade your subscription to access this feature");
@@ -61,10 +66,11 @@ function formatTime(isoString: string): string {
 export default function RaceHeatmapPage() {
   const queryClient = useQueryClient();
   const { isConnected, on, subscribeToRace, unsubscribeFromRace } = useWebSocket();
+  const [typeFilter, setTypeFilter] = useState<RaceTypeFilter>("ALL");
 
   const { data: races, isLoading, error } = useQuery({
-    queryKey: ["race-heatmap-page"],
-    queryFn: fetchHeatmapData,
+    queryKey: ["race-heatmap-page", typeFilter],
+    queryFn: () => fetchHeatmapData(typeFilter),
     refetchInterval: isConnected ? 60000 : 30000,
   });
 
@@ -93,7 +99,7 @@ export default function RaceHeatmapPage() {
         totalVolume?: number;
       };
       if (!d?.marketId || !d?.runners) return;
-      queryClient.setQueryData<HeatmapRace[]>(["race-heatmap-page"], (old) => {
+      queryClient.setQueryData<HeatmapRace[]>(["race-heatmap-page", typeFilter], (old) => {
         if (!old) return old;
         return old.map((race) => {
           if (race.raceId !== d.marketId) return race;
@@ -118,15 +124,40 @@ export default function RaceHeatmapPage() {
     });
 
     return () => unsub();
-  }, [on, queryClient]);
+  }, [on, queryClient, typeFilter]);
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold">Race Heatmap</h1>
-        <p className="text-muted-foreground mt-1">
-          Visual money flow showing where bets are concentrated across upcoming races
-        </p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-3xl font-bold">Race Heatmap</h1>
+          <p className="text-muted-foreground mt-1">
+            Visual money flow showing where bets are concentrated across races
+          </p>
+        </div>
+        <div className="flex gap-1">
+          <Button
+            variant={typeFilter === "ALL" ? "default" : "outline"}
+            size="sm"
+            onClick={() => setTypeFilter("ALL")}
+          >
+            All
+          </Button>
+          <Button
+            variant={typeFilter === "HORSE" ? "default" : "outline"}
+            size="sm"
+            onClick={() => setTypeFilter("HORSE")}
+          >
+            Horses
+          </Button>
+          <Button
+            variant={typeFilter === "DOG" ? "default" : "outline"}
+            size="sm"
+            onClick={() => setTypeFilter("DOG")}
+          >
+            Dogs
+          </Button>
+        </div>
       </div>
 
       {isLoading ? (
@@ -142,7 +173,7 @@ export default function RaceHeatmapPage() {
       ) : races && races.length > 0 ? (
         <div className="space-y-6">
           {races.map((race) => (
-            <Card key={race.raceId}>
+            <Card key={race.raceId} className={cn(race.isRecent && "opacity-75 border-dashed")}>
               <CardHeader className="pb-3">
                 <div className="flex items-center justify-between">
                   <div>
@@ -153,6 +184,12 @@ export default function RaceHeatmapPage() {
                       <Badge variant={race.raceType === "HORSE" ? "default" : "secondary"}>
                         {race.raceType}
                       </Badge>
+                      {race.isRecent && (
+                        <Badge variant="outline" className="text-xs">
+                          <CheckCircle className="h-3 w-3 mr-1" />
+                          Recent
+                        </Badge>
+                      )}
                     </CardTitle>
                     <p className="text-sm text-muted-foreground mt-1">{race.raceName}</p>
                   </div>
@@ -214,9 +251,11 @@ export default function RaceHeatmapPage() {
         <Card>
           <CardContent className="py-16 text-center">
             <BarChart3 className="h-12 w-12 mx-auto mb-3 opacity-30" />
-            <p className="text-muted-foreground">No upcoming races in the next 2 hours</p>
+            <p className="text-muted-foreground">
+              No {typeFilter !== "ALL" ? typeFilter.toLowerCase() : ""} races found
+            </p>
             <p className="text-xs text-muted-foreground mt-1">
-              Heatmap data will appear when races are scheduled
+              Showing recent and upcoming races
             </p>
           </CardContent>
         </Card>
